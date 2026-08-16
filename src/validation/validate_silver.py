@@ -9,11 +9,21 @@ BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
 RAW_PREFIX = "raw/yellow_tripdata/year=2025/"
 SILVER_PREFIX = "silver/yellow_tripdata/year=2025/"
 
+
 EXPECTED_DURATION_QUALITY = {
     "VALID",
     "INVALID",
     "UNAVAILABLE_SOURCE_SEMANTICS",
 }
+
+
+EXPECTED_DISTANCE_QUALITY = {
+    "VALID",
+    "INVALID",
+    "ZERO_REPORTED",
+    "SUSPICIOUS_EXTREME",
+}
+
 
 REQUIRED_SILVER_COLUMNS = {
     "VendorID",
@@ -23,7 +33,9 @@ REQUIRED_SILVER_COLUMNS = {
     "fare_amount",
     "duration_min",
     "duration_quality",
+    "distance_quality",
 }
+
 
 s3 = boto3.client("s3")
 
@@ -100,51 +112,50 @@ def validate_file(raw_key, silver_key):
             f"Missing columns: {sorted(missing_columns)}"
         )
 
-    # If quality columns are missing, remaining checks
-    # cannot be performed safely.
-    if missing_columns:
         return failures
 
     # ---------------------------------------------------------
     # 3. duration_quality domain
     # ---------------------------------------------------------
 
-    observed_quality = set(
+    observed_duration_quality = set(
         silver_df["duration_quality"]
         .dropna()
         .unique()
     )
 
-    unexpected_quality = (
-        observed_quality
+    unexpected_duration_quality = (
+        observed_duration_quality
         - EXPECTED_DURATION_QUALITY
     )
 
     print(
         f"duration_quality values: "
-        f"{sorted(observed_quality)}"
+        f"{sorted(observed_duration_quality)}"
     )
 
-    if unexpected_quality:
+    if unexpected_duration_quality:
         failures.append(
             f"Unexpected duration_quality values: "
-            f"{sorted(unexpected_quality)}"
+            f"{sorted(unexpected_duration_quality)}"
         )
 
     # ---------------------------------------------------------
-    # 4. VALID durations must be positive or zero
+    # 4. VALID durations must not be negative
     # ---------------------------------------------------------
 
-    valid_rows = (
+    valid_duration_rows = (
         silver_df["duration_quality"] == "VALID"
     )
 
-    invalid_valid_duration = (
-        valid_rows
+    valid_with_negative_duration = (
+        valid_duration_rows
         & (silver_df["duration_min"] < 0)
     )
 
-    count = int(invalid_valid_duration.sum())
+    count = int(
+        valid_with_negative_duration.sum()
+    )
 
     print(
         f"VALID rows with negative duration: "
@@ -160,16 +171,18 @@ def validate_file(raw_key, silver_key):
     # 5. INVALID duration must be NULL
     # ---------------------------------------------------------
 
-    invalid_rows = (
+    invalid_duration_rows = (
         silver_df["duration_quality"] == "INVALID"
     )
 
-    invalid_with_value = (
-        invalid_rows
+    invalid_duration_with_value = (
+        invalid_duration_rows
         & silver_df["duration_min"].notna()
     )
 
-    count = int(invalid_with_value.sum())
+    count = int(
+        invalid_duration_with_value.sum()
+    )
 
     print(
         f"INVALID rows with duration value: "
@@ -182,20 +195,22 @@ def validate_file(raw_key, silver_key):
         )
 
     # ---------------------------------------------------------
-    # 6. Helix unavailable duration must be NULL
+    # 6. UNAVAILABLE duration must be NULL
     # ---------------------------------------------------------
 
-    unavailable_rows = (
+    unavailable_duration_rows = (
         silver_df["duration_quality"]
         == "UNAVAILABLE_SOURCE_SEMANTICS"
     )
 
-    unavailable_with_value = (
-        unavailable_rows
+    unavailable_duration_with_value = (
+        unavailable_duration_rows
         & silver_df["duration_min"].notna()
     )
 
-    count = int(unavailable_with_value.sum())
+    count = int(
+        unavailable_duration_with_value.sum()
+    )
 
     print(
         f"UNAVAILABLE rows with duration value: "
@@ -208,7 +223,137 @@ def validate_file(raw_key, silver_key):
         )
 
     # ---------------------------------------------------------
-    # Summary
+    # 7. distance_quality domain
+    # ---------------------------------------------------------
+
+    observed_distance_quality = set(
+        silver_df["distance_quality"]
+        .dropna()
+        .unique()
+    )
+
+    unexpected_distance_quality = (
+        observed_distance_quality
+        - EXPECTED_DISTANCE_QUALITY
+    )
+
+    print(
+        f"distance_quality values: "
+        f"{sorted(observed_distance_quality)}"
+    )
+
+    if unexpected_distance_quality:
+        failures.append(
+            f"Unexpected distance_quality values: "
+            f"{sorted(unexpected_distance_quality)}"
+        )
+
+    # ---------------------------------------------------------
+    # 8. Negative distance must be INVALID
+    # ---------------------------------------------------------
+
+    negative_distance_wrong = (
+        (silver_df["trip_distance"] < 0)
+        & (
+            silver_df["distance_quality"]
+            != "INVALID"
+        )
+    )
+
+    count = int(
+        negative_distance_wrong.sum()
+    )
+
+    print(
+        f"Negative distances not INVALID: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} negative distances are not INVALID"
+        )
+
+    # ---------------------------------------------------------
+    # 9. Zero distance must be ZERO_REPORTED
+    # ---------------------------------------------------------
+
+    zero_distance_wrong = (
+        (silver_df["trip_distance"] == 0)
+        & (
+            silver_df["distance_quality"]
+            != "ZERO_REPORTED"
+        )
+    )
+
+    count = int(
+        zero_distance_wrong.sum()
+    )
+
+    print(
+        f"Zero distances not ZERO_REPORTED: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} zero distances are not ZERO_REPORTED"
+        )
+
+    # ---------------------------------------------------------
+    # 10. Distances > 500 must be SUSPICIOUS_EXTREME
+    # ---------------------------------------------------------
+
+    extreme_distance_wrong = (
+        (silver_df["trip_distance"] > 500)
+        & (
+            silver_df["distance_quality"]
+            != "SUSPICIOUS_EXTREME"
+        )
+    )
+
+    count = int(
+        extreme_distance_wrong.sum()
+    )
+
+    print(
+        f"Distances >500 not SUSPICIOUS_EXTREME: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} extreme distances are incorrectly classified"
+        )
+
+    # ---------------------------------------------------------
+    # 11. VALID distance must be > 0 and <= 500
+    # ---------------------------------------------------------
+
+    valid_distance_wrong = (
+        (silver_df["distance_quality"] == "VALID")
+        & (
+            (silver_df["trip_distance"] <= 0)
+            | (silver_df["trip_distance"] > 500)
+        )
+    )
+
+    count = int(
+        valid_distance_wrong.sum()
+    )
+
+    print(
+        f"VALID distances outside expected range: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} VALID distance rows are outside expected range"
+        )
+
+    # ---------------------------------------------------------
+    # Distribution summary
     # ---------------------------------------------------------
 
     print("\nDuration quality distribution:")
@@ -218,14 +363,26 @@ def validate_file(raw_key, silver_key):
         .value_counts(dropna=False)
     )
 
+    print("\nDistance quality distribution:")
+
+    print(
+        silver_df["distance_quality"]
+        .value_counts(dropna=False)
+    )
+
     return failures
 
 
 def main():
-    raw_files = list_parquet_files(RAW_PREFIX)
-    silver_files = list_parquet_files(SILVER_PREFIX)
+    raw_files = list_parquet_files(
+        RAW_PREFIX
+    )
 
-    print("=== SILVER VALIDATION V1 ===\n")
+    silver_files = list_parquet_files(
+        SILVER_PREFIX
+    )
+
+    print("=== SILVER VALIDATION V2 ===\n")
 
     print(f"Raw files:    {len(raw_files)}")
     print(f"Silver files: {len(silver_files)}")
@@ -271,7 +428,7 @@ def main():
     print("\nPASS ✅")
     print(
         "All Silver batches satisfy "
-        "the current V1 validation rules."
+        "the current V2 validation rules."
     )
 
 

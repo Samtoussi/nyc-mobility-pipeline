@@ -85,6 +85,39 @@ def apply_temporal_quality(df):
 
     return df
 
+def apply_distance_quality(df):
+    df = df.copy()
+
+    df["distance_quality"] = "VALID"
+
+    negative_distance = (
+        df["trip_distance"] < 0
+    )
+
+    df.loc[
+        negative_distance,
+        "distance_quality",
+    ] = "INVALID"
+
+    zero_distance = (
+        df["trip_distance"] == 0
+    )
+
+    df.loc[
+        zero_distance,
+        "distance_quality",
+    ] = "ZERO_REPORTED"
+
+    suspicious_extreme = (
+        df["trip_distance"] > 500
+    )
+
+    df.loc[
+        suspicious_extreme,
+        "distance_quality",
+    ] = "SUSPICIOUS_EXTREME"
+
+    return df
 
 def write_parquet_to_s3(df, key):
     buffer = BytesIO()
@@ -111,6 +144,7 @@ def transform_file(raw_key):
     print(f"Rows loaded: {len(df):,}")
 
     df = apply_temporal_quality(df)
+    df = apply_distance_quality(df)
 
     file_name = raw_key.split("/")[-1]
 

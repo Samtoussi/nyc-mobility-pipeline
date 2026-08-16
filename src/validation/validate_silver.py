@@ -16,12 +16,18 @@ EXPECTED_DURATION_QUALITY = {
     "UNAVAILABLE_SOURCE_SEMANTICS",
 }
 
-
 EXPECTED_DISTANCE_QUALITY = {
     "VALID",
     "INVALID",
     "ZERO_REPORTED",
     "SUSPICIOUS_EXTREME",
+}
+
+EXPECTED_FINANCIAL_QUALITY = {
+    "STANDARD",
+    "ZERO_REPORTED",
+    "NEGATIVE_REPORTED",
+    "SOURCE_SPECIFIC",
 }
 
 
@@ -31,9 +37,12 @@ REQUIRED_SILVER_COLUMNS = {
     "tpep_dropoff_datetime",
     "trip_distance",
     "fare_amount",
+    "total_amount",
+    "payment_type",
     "duration_min",
     "duration_quality",
     "distance_quality",
+    "financial_quality",
 }
 
 
@@ -144,18 +153,12 @@ def validate_file(raw_key, silver_key):
     # 4. VALID durations must not be negative
     # ---------------------------------------------------------
 
-    valid_duration_rows = (
-        silver_df["duration_quality"] == "VALID"
-    )
-
     valid_with_negative_duration = (
-        valid_duration_rows
+        (silver_df["duration_quality"] == "VALID")
         & (silver_df["duration_min"] < 0)
     )
 
-    count = int(
-        valid_with_negative_duration.sum()
-    )
+    count = int(valid_with_negative_duration.sum())
 
     print(
         f"VALID rows with negative duration: "
@@ -171,18 +174,12 @@ def validate_file(raw_key, silver_key):
     # 5. INVALID duration must be NULL
     # ---------------------------------------------------------
 
-    invalid_duration_rows = (
-        silver_df["duration_quality"] == "INVALID"
-    )
-
     invalid_duration_with_value = (
-        invalid_duration_rows
+        (silver_df["duration_quality"] == "INVALID")
         & silver_df["duration_min"].notna()
     )
 
-    count = int(
-        invalid_duration_with_value.sum()
-    )
+    count = int(invalid_duration_with_value.sum())
 
     print(
         f"INVALID rows with duration value: "
@@ -198,19 +195,15 @@ def validate_file(raw_key, silver_key):
     # 6. UNAVAILABLE duration must be NULL
     # ---------------------------------------------------------
 
-    unavailable_duration_rows = (
-        silver_df["duration_quality"]
-        == "UNAVAILABLE_SOURCE_SEMANTICS"
-    )
-
     unavailable_duration_with_value = (
-        unavailable_duration_rows
+        (
+            silver_df["duration_quality"]
+            == "UNAVAILABLE_SOURCE_SEMANTICS"
+        )
         & silver_df["duration_min"].notna()
     )
 
-    count = int(
-        unavailable_duration_with_value.sum()
-    )
+    count = int(unavailable_duration_with_value.sum())
 
     print(
         f"UNAVAILABLE rows with duration value: "
@@ -260,9 +253,7 @@ def validate_file(raw_key, silver_key):
         )
     )
 
-    count = int(
-        negative_distance_wrong.sum()
-    )
+    count = int(negative_distance_wrong.sum())
 
     print(
         f"Negative distances not INVALID: "
@@ -286,9 +277,7 @@ def validate_file(raw_key, silver_key):
         )
     )
 
-    count = int(
-        zero_distance_wrong.sum()
-    )
+    count = int(zero_distance_wrong.sum())
 
     print(
         f"Zero distances not ZERO_REPORTED: "
@@ -312,9 +301,7 @@ def validate_file(raw_key, silver_key):
         )
     )
 
-    count = int(
-        extreme_distance_wrong.sum()
-    )
+    count = int(extreme_distance_wrong.sum())
 
     print(
         f"Distances >500 not SUSPICIOUS_EXTREME: "
@@ -338,9 +325,7 @@ def validate_file(raw_key, silver_key):
         )
     )
 
-    count = int(
-        valid_distance_wrong.sum()
-    )
+    count = int(valid_distance_wrong.sum())
 
     print(
         f"VALID distances outside expected range: "
@@ -350,6 +335,142 @@ def validate_file(raw_key, silver_key):
     if count > 0:
         failures.append(
             f"{count} VALID distance rows are outside expected range"
+        )
+
+    # ---------------------------------------------------------
+    # 12. financial_quality domain
+    # ---------------------------------------------------------
+
+    observed_financial_quality = set(
+        silver_df["financial_quality"]
+        .dropna()
+        .unique()
+    )
+
+    unexpected_financial_quality = (
+        observed_financial_quality
+        - EXPECTED_FINANCIAL_QUALITY
+    )
+
+    print(
+        f"financial_quality values: "
+        f"{sorted(observed_financial_quality)}"
+    )
+
+    if unexpected_financial_quality:
+        failures.append(
+            f"Unexpected financial_quality values: "
+            f"{sorted(unexpected_financial_quality)}"
+        )
+
+    # ---------------------------------------------------------
+    # 13. payment_type=0 must be SOURCE_SPECIFIC
+    # ---------------------------------------------------------
+
+    source_specific_wrong = (
+        (silver_df["payment_type"] == 0)
+        & (
+            silver_df["financial_quality"]
+            != "SOURCE_SPECIFIC"
+        )
+    )
+
+    count = int(source_specific_wrong.sum())
+
+    print(
+        f"payment_type=0 not SOURCE_SPECIFIC: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} payment_type=0 rows are not SOURCE_SPECIFIC"
+        )
+
+    # ---------------------------------------------------------
+    # 14. Non-Flex negative values must be NEGATIVE_REPORTED
+    # ---------------------------------------------------------
+
+    negative_financial_wrong = (
+        (silver_df["payment_type"] != 0)
+        & (
+            (silver_df["fare_amount"] < 0)
+            | (silver_df["total_amount"] < 0)
+        )
+        & (
+            silver_df["financial_quality"]
+            != "NEGATIVE_REPORTED"
+        )
+    )
+
+    count = int(negative_financial_wrong.sum())
+
+    print(
+        f"Non-Flex negative financial rows misclassified: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} non-Flex negative financial rows "
+            f"are incorrectly classified"
+        )
+
+    # ---------------------------------------------------------
+    # 15. Non-Flex zero values must be ZERO_REPORTED
+    #     unless a negative condition takes priority
+    # ---------------------------------------------------------
+
+    zero_financial_wrong = (
+        (silver_df["payment_type"] != 0)
+        & (silver_df["fare_amount"] >= 0)
+        & (silver_df["total_amount"] >= 0)
+        & (
+            (silver_df["fare_amount"] == 0)
+            | (silver_df["total_amount"] == 0)
+        )
+        & (
+            silver_df["financial_quality"]
+            != "ZERO_REPORTED"
+        )
+    )
+
+    count = int(zero_financial_wrong.sum())
+
+    print(
+        f"Non-Flex zero financial rows misclassified: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} non-Flex zero financial rows "
+            f"are incorrectly classified"
+        )
+
+    # ---------------------------------------------------------
+    # 16. STANDARD must contain ordinary positive values
+    # ---------------------------------------------------------
+
+    standard_wrong = (
+        (silver_df["financial_quality"] == "STANDARD")
+        & (
+            (silver_df["payment_type"] == 0)
+            | (silver_df["fare_amount"] <= 0)
+            | (silver_df["total_amount"] <= 0)
+        )
+    )
+
+    count = int(standard_wrong.sum())
+
+    print(
+        f"STANDARD financial rows violating contract: "
+        f"{count:,}"
+    )
+
+    if count > 0:
+        failures.append(
+            f"{count} STANDARD financial rows violate the contract"
         )
 
     # ---------------------------------------------------------
@@ -370,6 +491,13 @@ def validate_file(raw_key, silver_key):
         .value_counts(dropna=False)
     )
 
+    print("\nFinancial quality distribution:")
+
+    print(
+        silver_df["financial_quality"]
+        .value_counts(dropna=False)
+    )
+
     return failures
 
 
@@ -382,7 +510,7 @@ def main():
         SILVER_PREFIX
     )
 
-    print("=== SILVER VALIDATION V2 ===\n")
+    print("=== SILVER VALIDATION V3 ===\n")
 
     print(f"Raw files:    {len(raw_files)}")
     print(f"Silver files: {len(silver_files)}")
@@ -428,7 +556,7 @@ def main():
     print("\nPASS ✅")
     print(
         "All Silver batches satisfy "
-        "the current V2 validation rules."
+        "the current V3 validation rules."
     )
 
 

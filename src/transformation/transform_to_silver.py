@@ -85,6 +85,7 @@ def apply_temporal_quality(df):
 
     return df
 
+
 def apply_distance_quality(df):
     df = df.copy()
 
@@ -119,6 +120,49 @@ def apply_distance_quality(df):
 
     return df
 
+
+def apply_financial_quality(df):
+    df = df.copy()
+
+    # Default classification
+    df["financial_quality"] = "STANDARD"
+
+    # Zero values are preserved but explicitly classified.
+    zero_reported = (
+        (df["fare_amount"] == 0)
+        | (df["total_amount"] == 0)
+    )
+
+    df.loc[
+        zero_reported,
+        "financial_quality",
+    ] = "ZERO_REPORTED"
+
+    # Negative values are preserved rather than assumed corrupt.
+    negative_reported = (
+        (df["fare_amount"] < 0)
+        | (df["total_amount"] < 0)
+    )
+
+    df.loc[
+        negative_reported,
+        "financial_quality",
+    ] = "NEGATIVE_REPORTED"
+
+    # payment_type=0 represents source-specific Flex Fare
+    # semantics and therefore takes highest classification priority.
+    source_specific = (
+        df["payment_type"] == 0
+    )
+
+    df.loc[
+        source_specific,
+        "financial_quality",
+    ] = "SOURCE_SPECIFIC"
+
+    return df
+
+
 def write_parquet_to_s3(df, key):
     buffer = BytesIO()
 
@@ -145,6 +189,7 @@ def transform_file(raw_key):
 
     df = apply_temporal_quality(df)
     df = apply_distance_quality(df)
+    df = apply_financial_quality(df)
 
     file_name = raw_key.split("/")[-1]
 

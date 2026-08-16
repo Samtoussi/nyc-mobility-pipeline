@@ -194,23 +194,99 @@ The exact automated classification rules will be defined separately from this co
 
 # 4. Financial Quality
 
-Negative financial values must not automatically be treated as invalid data.
+Financial values must be preserved exactly as reported by the source.
 
-Profiling showed systematic negative fare behavior associated with specific source patterns and possible correction/reversal behavior.
+Negative or zero financial values must not automatically cause a trip record to be removed.
 
-Therefore:
+Profiling identified systematic financial behavior associated with specific source and payment patterns.
+
+---
+
+## Flex Fare
+
+Condition:
+
+payment_type = 0
+
+Action:
+
+Preserve all reported financial values.
+
+Quality:
+
+financial_quality = SOURCE_SPECIFIC
+
+Reason:
+
+Flex Fare records exhibit source-specific financial semantics that differ from ordinary metered trips.
+
+Negative fare_amount values within this population were found to coexist with positive total_amount values and must not automatically be interpreted as corruption.
+
+---
+
+## Negative financial values
+
+Condition:
 
 fare_amount < 0
+OR
+total_amount < 0
 
-does NOT imply:
+Action:
 
-INVALID RECORD
+Preserve the original values.
 
-Negative values must remain available unless stronger evidence indicates corruption.
+Quality:
 
-Silver must preserve the original financial information.
+financial_quality = NEGATIVE_REPORTED
 
-Future derived fields may classify financial semantics such as corrections or reversal candidates when sufficient evidence exists.
+Reason:
+
+Negative financial values may represent legitimate source behavior, disputes, corrections or other transaction semantics.
+
+The pipeline does not currently have sufficient evidence to classify these records more specifically.
+
+---
+
+## Zero financial values
+
+Condition:
+
+fare_amount = 0
+OR
+total_amount = 0
+
+Action:
+
+Preserve the original values.
+
+Quality:
+
+financial_quality = ZERO_REPORTED
+
+Zero values are not automatically considered invalid.
+
+---
+
+## Standard financial records
+
+Condition:
+
+No source-specific, negative or zero financial condition applies.
+
+Quality:
+
+financial_quality = STANDARD
+
+---
+
+## Financial classification principle
+
+Financial quality describes the characteristics of the reported financial values.
+
+It does not determine whether the entire trip record is valid.
+
+The Silver layer must not modify financial source values solely to make them conform to expected business behavior.
 
 ---
 

@@ -140,8 +140,8 @@ def main():
         f"Found {len(raw_files)} raw files.\n"
     )
 
-    # Smoke test: January only
-    transform_file(raw_files[0])
+    for raw_key in raw_files:
+        transform_file(raw_key)
 
 
 if __name__ == "__main__":

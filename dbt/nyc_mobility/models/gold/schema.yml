@@ -1,0 +1,104 @@
+version: 2
+
+models:
+  - name: daily_mobility_metrics
+    description: >
+      Daily aggregated mobility metrics for valid NYC Yellow Taxi trips.
+
+    columns:
+      - name: trip_date
+        description: Calendar date of the trip.
+        tests:
+          - not_null
+          - unique
+
+      - name: total_trips
+        description: Total number of valid trips for the day.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Total reported trip revenue for the day.
+        tests:
+          - not_null
+
+
+  - name: hourly_mobility_patterns
+    description: >
+      Aggregated NYC Yellow Taxi mobility patterns by weekday and pickup hour.
+
+    columns:
+      - name: weekday
+        description: Day of week where 1 is Monday and 7 is Sunday.
+        tests:
+          - not_null
+
+      - name: pickup_hour
+        description: Hour of pickup from 0 to 23.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 0
+                  - 1
+                  - 2
+                  - 3
+                  - 4
+                  - 5
+                  - 6
+                  - 7
+                  - 8
+                  - 9
+                  - 10
+                  - 11
+                  - 12
+                  - 13
+                  - 14
+                  - 15
+                  - 16
+                  - 17
+                  - 18
+                  - 19
+                  - 20
+                  - 21
+                  - 22
+                  - 23
+                quote: false
+
+      - name: total_trips
+        description: Total number of trips for the weekday and pickup hour.
+        tests:
+          - not_null
+
+  - name: pickup_location_performance
+    description: >
+      Aggregated performance metrics by NYC Taxi pickup location,
+      enriched with Taxi Zone lookup data.
+
+    columns:
+      - name: pickup_location_id
+        description: TLC Taxi Zone location identifier for the pickup.
+        tests:
+          - not_null
+          - unique
+
+      - name: borough
+        description: NYC borough associated with the pickup location.
+        tests:
+          - not_null
+
+      - name: zone
+        description: Human-readable TLC Taxi Zone name.
+        tests:
+          - not_null
+
+      - name: total_trips
+        description: Total number of valid trips originating from the pickup location.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Total reported revenue from trips originating from the pickup location.
+        tests:
+          - not_null

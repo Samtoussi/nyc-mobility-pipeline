@@ -85,6 +85,22 @@ def apply_temporal_quality(df):
 
     return df
 
+def apply_date_quality(df):
+    df = df.copy()
+
+    df["date_quality"] = "VALID"
+
+    outside_expected_year = (
+        (df["tpep_pickup_datetime"] < pd.Timestamp("2025-01-01"))
+        | (df["tpep_pickup_datetime"] >= pd.Timestamp("2026-01-01"))
+    )
+
+    df.loc[
+        outside_expected_year,
+        "date_quality",
+    ] = "OUTSIDE_EXPECTED_YEAR"
+
+    return df
 
 def apply_distance_quality(df):
     df = df.copy()
@@ -188,6 +204,7 @@ def transform_file(raw_key):
     print(f"Rows loaded: {len(df):,}")
 
     df = apply_temporal_quality(df)
+    df = apply_date_quality(df)
     df = apply_distance_quality(df)
     df = apply_financial_quality(df)
 

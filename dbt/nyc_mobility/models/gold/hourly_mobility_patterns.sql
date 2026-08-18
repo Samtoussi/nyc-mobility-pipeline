@@ -1,0 +1,36 @@
+{{ config(
+    materialized='table'
+) }}
+
+with valid_trips as (
+
+    select
+        tpep_pickup_datetime,
+        trip_distance,
+        total_amount,
+        duration_min
+
+    from nyc_mobility.yellow_tripdata
+
+     where year = '2025'
+      and date_quality = 'VALID'
+      and duration_quality = 'VALID'
+      and distance_quality = 'VALID'
+
+)
+
+select
+    day_of_week(tpep_pickup_datetime) as weekday,
+    hour(tpep_pickup_datetime) as pickup_hour,
+
+    count(*) as total_trips,
+
+    avg(trip_distance) as avg_trip_distance,
+    avg(duration_min) as avg_duration_min,
+    avg(total_amount) as avg_revenue_per_trip
+
+from valid_trips
+
+group by
+    day_of_week(tpep_pickup_datetime),
+    hour(tpep_pickup_datetime)

@@ -14,8 +14,7 @@ with silver as (
         financial_quality,
         date_quality
     from nyc_mobility.yellow_tripdata
-    where year = '2025'
-      and date_quality = 'VALID'
+    where date_quality = 'VALID'
 
 ),
 

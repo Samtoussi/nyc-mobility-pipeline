@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import boto3
 
@@ -9,21 +10,23 @@ LOCAL_RAW_DIR = Path("data/raw")
 s3 = boto3.client("s3")
 
 
-def upload_raw_data():
+def upload_raw_data(year: int):
+    year_dir = LOCAL_RAW_DIR / str(year)
+
     parquet_files = sorted(
-        LOCAL_RAW_DIR.glob("yellow_tripdata_2025-*.parquet")
+        year_dir.glob(f"yellow_tripdata_{year}-*.parquet")
     )
 
     if not parquet_files:
         raise FileNotFoundError(
-            f"No 2025 parquet files found in {LOCAL_RAW_DIR}"
+            f"No {year} parquet files found in {year_dir}"
         )
 
-    print(f"Found {len(parquet_files)} files.")
+    print(f"Found {len(parquet_files)} files for {year}.")
 
     for file_path in parquet_files:
         s3_key = (
-            f"raw/yellow_tripdata/year=2025/{file_path.name}"
+            f"raw/yellow_tripdata/year={year}/{file_path.name}"
         )
 
         print(f"Uploading {file_path.name}...")
@@ -38,4 +41,14 @@ def upload_raw_data():
 
 
 if __name__ == "__main__":
-    upload_raw_data()
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: python src/ingestion/ingest_to_s3.py <year>"
+        )
+
+    try:
+        year = int(sys.argv[1])
+    except ValueError:
+        raise SystemExit("Year must be a number.")
+
+    upload_raw_data(year)

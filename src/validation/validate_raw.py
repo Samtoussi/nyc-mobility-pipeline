@@ -1,11 +1,11 @@
 from io import BytesIO
+import sys
 
 import boto3
 import pandas as pd
 
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
-RAW_PREFIX = "raw/yellow_tripdata/year=2025/"
 
 
 # Columns expected from the 2025 Yellow Taxi source schema.
@@ -49,10 +49,12 @@ REQUIRED_RAW_COLUMNS = {
 s3 = boto3.client("s3")
 
 
-def list_raw_files():
+def list_raw_files(year: int):
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+
     response = s3.list_objects_v2(
         Bucket=BUCKET_NAME,
-        Prefix=RAW_PREFIX,
+        Prefix=raw_prefix,
     )
 
     objects = response.get("Contents", [])
@@ -181,7 +183,6 @@ def validate_file(raw_key):
     # For V1 we report timestamp nulls as warnings.
     # We have not yet established enough evidence
     # to fail an entire batch because of isolated null rows.
-
     if pickup_nulls:
         warnings.append(
             f"{pickup_nulls} NULL pickup timestamps"
@@ -196,14 +197,25 @@ def validate_file(raw_key):
 
 
 def main():
-    raw_files = list_raw_files()
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: python src/validation/validate_raw.py <year>"
+        )
 
-    print("=== RAW VALIDATION V1 ===\n")
+    try:
+        year = int(sys.argv[1])
+    except ValueError:
+        raise SystemExit("Year must be a number.")
+
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+    raw_files = list_raw_files(year)
+
+    print(f"=== RAW VALIDATION: {year} ===\n")
     print(f"Raw files found: {len(raw_files)}")
 
     if not raw_files:
         raise FileNotFoundError(
-            f"No parquet files found under {RAW_PREFIX}"
+            f"No parquet files found under {raw_prefix}"
         )
 
     all_failures = []
@@ -252,9 +264,10 @@ def main():
         )
 
     print("\nPASS ✅")
+
     print(
-        "All Raw batches satisfy "
-        "the current V1 schema contract."
+        f"All {year} Raw batches satisfy "
+        "the current schema contract."
     )
 
 

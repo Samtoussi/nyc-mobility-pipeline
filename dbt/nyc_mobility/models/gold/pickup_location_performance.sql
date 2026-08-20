@@ -13,8 +13,7 @@ with valid_trips as (
 
     from nyc_mobility.yellow_tripdata
 
-    where year = '2025'
-      and date_quality = 'VALID'
+    where date_quality = 'VALID'
       and duration_quality = 'VALID'
       and distance_quality = 'VALID'
 

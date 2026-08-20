@@ -1,4 +1,5 @@
 from io import BytesIO
+import sys
 
 import boto3
 import pandas as pd
@@ -6,16 +7,15 @@ import pandas as pd
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
 
-RAW_PREFIX = "raw/yellow_tripdata/year=2025/"
-SILVER_PREFIX = "silver/yellow_tripdata/year=2025/"
-
 s3 = boto3.client("s3")
 
 
-def list_raw_files():
+def list_raw_files(year: int):
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+
     response = s3.list_objects_v2(
         Bucket=BUCKET_NAME,
-        Prefix=RAW_PREFIX,
+        Prefix=raw_prefix,
     )
 
     objects = response.get("Contents", [])
@@ -85,14 +85,18 @@ def apply_temporal_quality(df):
 
     return df
 
-def apply_date_quality(df):
+
+def apply_date_quality(df, year: int):
     df = df.copy()
 
     df["date_quality"] = "VALID"
 
+    year_start = pd.Timestamp(f"{year}-01-01")
+    next_year_start = pd.Timestamp(f"{year + 1}-01-01")
+
     outside_expected_year = (
-        (df["tpep_pickup_datetime"] < pd.Timestamp("2025-01-01"))
-        | (df["tpep_pickup_datetime"] >= pd.Timestamp("2026-01-01"))
+        (df["tpep_pickup_datetime"] < year_start)
+        | (df["tpep_pickup_datetime"] >= next_year_start)
     )
 
     df.loc[
@@ -101,6 +105,7 @@ def apply_date_quality(df):
     ] = "OUTSIDE_EXPECTED_YEAR"
 
     return df
+
 
 def apply_distance_quality(df):
     df = df.copy()
@@ -196,7 +201,7 @@ def write_parquet_to_s3(df, key):
     )
 
 
-def transform_file(raw_key):
+def transform_file(raw_key, year: int):
     print(f"Reading {raw_key}...")
 
     df = read_parquet_from_s3(raw_key)
@@ -204,14 +209,16 @@ def transform_file(raw_key):
     print(f"Rows loaded: {len(df):,}")
 
     df = apply_temporal_quality(df)
-    df = apply_date_quality(df)
+    df = apply_date_quality(df, year)
     df = apply_distance_quality(df)
     df = apply_financial_quality(df)
 
     file_name = raw_key.split("/")[-1]
 
+    silver_prefix = f"silver/yellow_tripdata/year={year}/"
+
     silver_key = (
-        f"{SILVER_PREFIX}{file_name}"
+        f"{silver_prefix}{file_name}"
     )
 
     print(f"Writing {silver_key}...")
@@ -225,19 +232,33 @@ def transform_file(raw_key):
 
 
 def main():
-    raw_files = list_raw_files()
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: python src/transformation/transform_to_silver.py <year>"
+        )
+
+    try:
+        year = int(sys.argv[1])
+    except ValueError:
+        raise SystemExit("Year must be a number.")
+
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+    raw_files = list_raw_files(year)
 
     if not raw_files:
         raise FileNotFoundError(
-            f"No parquet files found under {RAW_PREFIX}"
+            f"No parquet files found under {raw_prefix}"
         )
 
     print(
-        f"Found {len(raw_files)} raw files.\n"
+        f"Found {len(raw_files)} raw files for {year}.\n"
     )
 
     for raw_key in raw_files:
-        transform_file(raw_key)
+        transform_file(
+            raw_key,
+            year,
+        )
 
 
 if __name__ == "__main__":

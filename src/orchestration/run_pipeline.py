@@ -22,7 +22,7 @@ STEPS = [
 ]
 
 
-def run_step(name, script_path):
+def run_step(name, script_path, year):
     print("\n" + "=" * 80)
     print(f"STARTING: {name}")
     print("=" * 80)
@@ -30,7 +30,11 @@ def run_step(name, script_path):
     started_at = datetime.now()
 
     result = subprocess.run(
-        [sys.executable, str(script_path)],
+        [
+            sys.executable,
+            str(script_path),
+            str(year),
+        ],
         cwd=PROJECT_ROOT,
     )
 
@@ -54,15 +58,30 @@ def run_step(name, script_path):
 
 
 def main():
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: python src/orchestration/run_pipeline.py <year>"
+        )
+
+    try:
+        year = int(sys.argv[1])
+    except ValueError:
+        raise SystemExit("Year must be a number.")
+
     pipeline_started_at = datetime.now()
 
     print("\n" + "=" * 80)
     print("NYC MOBILITY PIPELINE")
     print("=" * 80)
+    print(f"Year: {year}")
     print(f"Started: {pipeline_started_at}")
 
     for name, script_path in STEPS:
-        run_step(name, script_path)
+        run_step(
+            name,
+            script_path,
+            year,
+        )
 
     pipeline_finished_at = datetime.now()
     total_runtime = pipeline_finished_at - pipeline_started_at
@@ -71,6 +90,7 @@ def main():
     print("PIPELINE COMPLETE")
     print("=" * 80)
     print("Status: SUCCESS")
+    print(f"Year:     {year}")
     print(f"Started:  {pipeline_started_at}")
     print(f"Finished: {pipeline_finished_at}")
     print(f"Runtime:  {total_runtime}")

@@ -1,13 +1,11 @@
 from io import BytesIO
+import sys
 
 import boto3
 import pandas as pd
 
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
-
-RAW_PREFIX = "raw/yellow_tripdata/year=2025/"
-SILVER_PREFIX = "silver/yellow_tripdata/year=2025/"
 
 
 EXPECTED_DURATION_QUALITY = {
@@ -502,15 +500,28 @@ def validate_file(raw_key, silver_key):
 
 
 def main():
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: python src/validation/validate_silver.py <year>"
+        )
+
+    try:
+        year = int(sys.argv[1])
+    except ValueError:
+        raise SystemExit("Year must be a number.")
+
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+    silver_prefix = f"silver/yellow_tripdata/year={year}/"
+
     raw_files = list_parquet_files(
-        RAW_PREFIX
+        raw_prefix
     )
 
     silver_files = list_parquet_files(
-        SILVER_PREFIX
+        silver_prefix
     )
 
-    print("=== SILVER VALIDATION V3 ===\n")
+    print(f"=== SILVER VALIDATION: {year} ===\n")
 
     print(f"Raw files:    {len(raw_files)}")
     print(f"Silver files: {len(silver_files)}")
@@ -554,9 +565,10 @@ def main():
         )
 
     print("\nPASS ✅")
+
     print(
-        "All Silver batches satisfy "
-        "the current V3 validation rules."
+        f"All {year} Silver batches satisfy "
+        "the current validation rules."
     )
 
 

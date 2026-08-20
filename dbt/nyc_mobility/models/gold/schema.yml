@@ -81,7 +81,7 @@ models:
         description: TLC Taxi Zone location identifier for the pickup.
         tests:
           - not_null
-          - unique
+          
 
       - name: borough
         description: NYC borough associated with the pickup location.

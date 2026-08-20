@@ -5,6 +5,7 @@
 with valid_trips as (
 
     select
+        cast(tpep_pickup_datetime as date) as trip_date,
         PULocationID,
         trip_distance,
         duration_min,
@@ -22,6 +23,7 @@ with valid_trips as (
 location_metrics as (
 
     select
+        trip_date,
         PULocationID as pickup_location_id,
 
         count(*) as total_trips,
@@ -32,11 +34,14 @@ location_metrics as (
 
     from valid_trips
 
-    group by PULocationID
+    group by
+        trip_date,
+        PULocationID
 
 )
 
 select
+    m.trip_date,
     m.pickup_location_id,
     z.Borough as borough,
     z.Zone as zone,

@@ -5,6 +5,7 @@
 with valid_trips as (
 
     select
+        cast(tpep_pickup_datetime as date) as trip_date,
         tpep_pickup_datetime,
         trip_distance,
         total_amount,
@@ -12,7 +13,7 @@ with valid_trips as (
 
     from nyc_mobility.yellow_tripdata
 
-     where year = '2025'
+    where year = '2025'
       and date_quality = 'VALID'
       and duration_quality = 'VALID'
       and distance_quality = 'VALID'
@@ -20,11 +21,11 @@ with valid_trips as (
 )
 
 select
+    trip_date,
     day_of_week(tpep_pickup_datetime) as weekday,
     hour(tpep_pickup_datetime) as pickup_hour,
 
     count(*) as total_trips,
-
     avg(trip_distance) as avg_trip_distance,
     avg(duration_min) as avg_duration_min,
     avg(total_amount) as avg_revenue_per_trip
@@ -32,5 +33,6 @@ select
 from valid_trips
 
 group by
+    trip_date,
     day_of_week(tpep_pickup_datetime),
     hour(tpep_pickup_datetime)

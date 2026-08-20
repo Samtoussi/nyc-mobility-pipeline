@@ -1,0 +1,6 @@
+boto3==1.43.72
+pandas==3.0.5
+psutil==7.2.2
+pyarrow==25.0.1
+dbt-core==1.12.2
+dbt-athena-community==1.11.0

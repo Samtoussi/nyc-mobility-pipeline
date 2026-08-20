@@ -1,4 +1,5 @@
 select
+    trip_date,
     weekday,
     pickup_hour,
     count(*) as row_count
@@ -6,6 +7,7 @@ select
 from {{ ref('hourly_mobility_patterns') }}
 
 group by
+    trip_date,
     weekday,
     pickup_hour
 

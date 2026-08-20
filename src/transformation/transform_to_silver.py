@@ -40,6 +40,19 @@ def read_parquet_from_s3(key):
     )
 
 
+def normalize_source_schema(df):
+    df = df.copy()
+
+    if "airport_fee" in df.columns and "Airport_fee" not in df.columns:
+        df = df.rename(
+            columns={
+                "airport_fee": "Airport_fee",
+            }
+        )
+
+    return df
+
+
 def apply_temporal_quality(df):
     df = df.copy()
 
@@ -208,6 +221,7 @@ def transform_file(raw_key, year: int):
 
     print(f"Rows loaded: {len(df):,}")
 
+    df = normalize_source_schema(df)
     df = apply_temporal_quality(df)
     df = apply_date_quality(df, year)
     df = apply_distance_quality(df)

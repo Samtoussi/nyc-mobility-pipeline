@@ -27,3 +27,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log

@@ -500,9 +500,10 @@ def validate_file(raw_key, silver_key):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise SystemExit(
-            "Usage: python src/validation/validate_silver.py <year>"
+            "Usage: python src/validation/validate_silver.py "
+            "<year> [file_name]"
         )
 
     try:
@@ -512,6 +513,66 @@ def main():
 
     raw_prefix = f"raw/yellow_tripdata/year={year}/"
     silver_prefix = f"silver/yellow_tripdata/year={year}/"
+
+    # ---------------------------------------------------------
+    # Single-batch mode
+    # ---------------------------------------------------------
+
+    if len(sys.argv) == 3:
+        file_name = sys.argv[2]
+
+        expected_prefix = f"yellow_tripdata_{year}-"
+
+        if (
+            not file_name.startswith(expected_prefix)
+            or not file_name.endswith(".parquet")
+        ):
+            raise SystemExit(
+                f"Invalid batch filename for {year}: "
+                f"{file_name}"
+            )
+
+        raw_key = f"{raw_prefix}{file_name}"
+        silver_key = f"{silver_prefix}{file_name}"
+
+        print(
+            f"=== SILVER VALIDATION: "
+            f"{file_name} ==="
+        )
+
+        failures = validate_file(
+            raw_key,
+            silver_key,
+        )
+
+        print("\n" + "=" * 80)
+        print("VALIDATION SUMMARY")
+        print("=" * 80)
+
+        if failures:
+            print(
+                f"\nFAILED with "
+                f"{len(failures)} issue(s):\n"
+            )
+
+            for failure in failures:
+                print(f"- {silver_key}: {failure}")
+
+            raise ValueError(
+                "Silver validation failed."
+            )
+
+        print("\nPASS ✅")
+        print(
+            "Silver batch satisfies "
+            "the current validation rules."
+        )
+
+        return
+
+    # ---------------------------------------------------------
+    # Full-year mode
+    # ---------------------------------------------------------
 
     raw_files = list_parquet_files(
         raw_prefix

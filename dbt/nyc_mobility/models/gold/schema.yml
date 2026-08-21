@@ -71,6 +71,7 @@ models:
         tests:
           - not_null
 
+
   - name: pickup_location_performance
     description: >
       Aggregated performance metrics by NYC Taxi pickup location,
@@ -81,7 +82,6 @@ models:
         description: TLC Taxi Zone location identifier for the pickup.
         tests:
           - not_null
-          
 
       - name: borough
         description: NYC borough associated with the pickup location.
@@ -100,5 +100,91 @@ models:
 
       - name: total_revenue
         description: Total reported revenue from trips originating from the pickup location.
+        tests:
+          - not_null
+
+
+  - name: monthly_mobility_trends
+    description: >
+      Monthly NYC Yellow Taxi mobility metrics used for historical,
+      seasonal, year-over-year, and year-to-date analysis.
+
+    columns:
+      - name: month_start
+        description: First calendar day of the aggregated month.
+        tests:
+          - not_null
+          - unique
+
+      - name: year
+        description: Calendar year of the aggregated month.
+        tests:
+          - not_null
+
+      - name: month
+        description: Calendar month number from 1 to 12.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 1
+                  - 2
+                  - 3
+                  - 4
+                  - 5
+                  - 6
+                  - 7
+                  - 8
+                  - 9
+                  - 10
+                  - 11
+                  - 12
+                quote: false
+
+      - name: total_trips
+        description: Total number of trips during the month.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Total reported trip revenue during the month.
+        tests:
+          - not_null
+
+  - name: yearly_mobility_summary
+    description: >
+      Yearly NYC Yellow Taxi mobility metrics used for high-level
+      historical and year-to-date comparisons.
+
+    columns:
+      - name: year
+        description: Calendar year of the aggregated metrics.
+        tests:
+          - not_null
+          - unique
+
+      - name: total_trips
+        description: Total number of trips during the year.
+        tests:
+          - not_null
+
+      - name: total_revenue
+        description: Total reported trip revenue during the year.
+        tests:
+          - not_null
+
+      - name: avg_revenue_per_trip
+        description: Average reported revenue per trip during the year.
+        tests:
+          - not_null
+
+      - name: avg_trip_distance
+        description: Weighted average valid trip distance during the year.
+        tests:
+          - not_null
+
+      - name: avg_duration_min
+        description: Weighted average valid trip duration in minutes during the year.
         tests:
           - not_null

@@ -7,8 +7,6 @@ import pandas as pd
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
 
-
-# Columns expected from the 2025 Yellow Taxi source schema.
 EXPECTED_RAW_COLUMNS = {
     "VendorID",
     "tpep_pickup_datetime",
@@ -32,9 +30,6 @@ EXPECTED_RAW_COLUMNS = {
     "cbd_congestion_fee",
 }
 
-
-# These columns are required by our current Silver transformation.
-# If one is missing, transformation cannot safely continue.
 REQUIRED_RAW_COLUMNS = {
     "VendorID",
     "tpep_pickup_datetime",
@@ -44,7 +39,6 @@ REQUIRED_RAW_COLUMNS = {
     "fare_amount",
     "total_amount",
 }
-
 
 s3 = boto3.client("s3")
 
@@ -93,10 +87,6 @@ def validate_file(raw_key):
 
     actual_columns = set(df.columns)
 
-    # ---------------------------------------------------------
-    # 1. Required columns
-    # ---------------------------------------------------------
-
     missing_required = (
         REQUIRED_RAW_COLUMNS
         - actual_columns
@@ -112,10 +102,6 @@ def validate_file(raw_key):
             f"Missing required columns: "
             f"{sorted(missing_required)}"
         )
-
-    # ---------------------------------------------------------
-    # 2. Expected schema
-    # ---------------------------------------------------------
 
     missing_expected = (
         EXPECTED_RAW_COLUMNS
@@ -137,7 +123,6 @@ def validate_file(raw_key):
         f"{sorted(unexpected_columns)}"
     )
 
-    # Missing expected-but-not-required columns are warnings.
     optional_missing = (
         missing_expected
         - REQUIRED_RAW_COLUMNS
@@ -149,24 +134,31 @@ def validate_file(raw_key):
             f"required downstream: {sorted(optional_missing)}"
         )
 
-    # New columns do not automatically make the batch invalid.
     if unexpected_columns:
         warnings.append(
             f"Unexpected upstream columns detected: "
             f"{sorted(unexpected_columns)}"
         )
 
-    # ---------------------------------------------------------
-    # 3. Critical timestamp nulls
-    # ---------------------------------------------------------
+    pickup_nulls = (
+        int(
+            df["tpep_pickup_datetime"]
+            .isna()
+            .sum()
+        )
+        if "tpep_pickup_datetime" in df.columns
+        else None
+    )
 
-    pickup_nulls = int(
-        df["tpep_pickup_datetime"].isna().sum()
-    ) if "tpep_pickup_datetime" in df.columns else None
-
-    dropoff_nulls = int(
-        df["tpep_dropoff_datetime"].isna().sum()
-    ) if "tpep_dropoff_datetime" in df.columns else None
+    dropoff_nulls = (
+        int(
+            df["tpep_dropoff_datetime"]
+            .isna()
+            .sum()
+        )
+        if "tpep_dropoff_datetime" in df.columns
+        else None
+    )
 
     if pickup_nulls is not None:
         print(
@@ -180,9 +172,6 @@ def validate_file(raw_key):
             f"{dropoff_nulls:,}"
         )
 
-    # For V1 we report timestamp nulls as warnings.
-    # We have not yet established enough evidence
-    # to fail an entire batch because of isolated null rows.
     if pickup_nulls:
         warnings.append(
             f"{pickup_nulls} NULL pickup timestamps"
@@ -197,9 +186,10 @@ def validate_file(raw_key):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise SystemExit(
-            "Usage: python src/validation/validate_raw.py <year>"
+            "Usage: python src/validation/validate_raw.py "
+            "<year> [file_name]"
         )
 
     try:
@@ -208,14 +198,46 @@ def main():
         raise SystemExit("Year must be a number.")
 
     raw_prefix = f"raw/yellow_tripdata/year={year}/"
-    raw_files = list_raw_files(year)
 
-    print(f"=== RAW VALIDATION: {year} ===\n")
-    print(f"Raw files found: {len(raw_files)}")
+    if len(sys.argv) == 3:
+        file_name = sys.argv[2]
+
+        expected_prefix = f"yellow_tripdata_{year}-"
+
+        if (
+            not file_name.startswith(expected_prefix)
+            or not file_name.endswith(".parquet")
+        ):
+            raise SystemExit(
+                f"Invalid batch filename for {year}: "
+                f"{file_name}"
+            )
+
+        raw_files = [
+            f"{raw_prefix}{file_name}"
+        ]
+
+        print(
+            f"=== RAW VALIDATION: "
+            f"{file_name} ===\n"
+        )
+
+    else:
+        raw_files = list_raw_files(year)
+
+        print(
+            f"=== RAW VALIDATION: "
+            f"{year} ===\n"
+        )
+
+        print(
+            f"Raw files found: {len(raw_files)}"
+        )
 
     if not raw_files:
         raise FileNotFoundError(
-            f"No parquet files found under {raw_prefix}"
+            f"No parquet files found under "
+            f"{raw_prefix}"
         )
 
     all_failures = []
@@ -265,10 +287,16 @@ def main():
 
     print("\nPASS ✅")
 
-    print(
-        f"All {year} Raw batches satisfy "
-        "the current schema contract."
-    )
+    if len(sys.argv) == 3:
+        print(
+            "Raw batch satisfies "
+            "the current schema contract."
+        )
+    else:
+        print(
+            f"All {year} Raw batches satisfy "
+            "the current schema contract."
+        )
 
 
 if __name__ == "__main__":

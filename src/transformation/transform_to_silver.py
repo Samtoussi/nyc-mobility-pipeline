@@ -1,4 +1,5 @@
 from io import BytesIO
+import re
 import sys
 
 import boto3
@@ -27,6 +28,23 @@ def list_raw_files(year: int):
     )
 
 
+def list_silver_files(year: int) -> set[str]:
+    silver_prefix = f"silver/yellow_tripdata/year={year}/"
+
+    response = s3.list_objects_v2(
+        Bucket=BUCKET_NAME,
+        Prefix=silver_prefix,
+    )
+
+    objects = response.get("Contents", [])
+
+    return {
+        obj["Key"].split("/")[-1]
+        for obj in objects
+        if obj["Key"].endswith(".parquet")
+    }
+
+
 def read_parquet_from_s3(key):
     response = s3.get_object(
         Bucket=BUCKET_NAME,
@@ -43,7 +61,10 @@ def read_parquet_from_s3(key):
 def normalize_source_schema(df):
     df = df.copy()
 
-    if "airport_fee" in df.columns and "Airport_fee" not in df.columns:
+    if (
+        "airport_fee" in df.columns
+        and "Airport_fee" not in df.columns
+    ):
         df = df.rename(
             columns={
                 "airport_fee": "Airport_fee",
@@ -51,6 +72,37 @@ def normalize_source_schema(df):
         )
 
     return df
+
+
+def extract_batch_month(
+    file_name: str,
+    expected_year: int,
+) -> int:
+    pattern = (
+        rf"^yellow_tripdata_"
+        rf"{expected_year}-(\d{{2}})\.parquet$"
+    )
+
+    match = re.match(
+        pattern,
+        file_name,
+    )
+
+    if not match:
+        raise ValueError(
+            f"Could not determine batch month "
+            f"from filename: {file_name}"
+        )
+
+    month = int(match.group(1))
+
+    if month < 1 or month > 12:
+        raise ValueError(
+            f"Invalid month in filename: "
+            f"{file_name}"
+        )
+
+    return month
 
 
 def apply_temporal_quality(df):
@@ -99,18 +151,70 @@ def apply_temporal_quality(df):
     return df
 
 
-def apply_date_quality(df, year: int):
+def apply_date_quality(
+    df,
+    year: int,
+    month: int,
+):
     df = df.copy()
 
     df["date_quality"] = "VALID"
 
-    year_start = pd.Timestamp(f"{year}-01-01")
-    next_year_start = pd.Timestamp(f"{year + 1}-01-01")
+    year_start = pd.Timestamp(
+        year=year,
+        month=1,
+        day=1,
+    )
+
+    next_year_start = pd.Timestamp(
+        year=year + 1,
+        month=1,
+        day=1,
+    )
+
+    month_start = pd.Timestamp(
+        year=year,
+        month=month,
+        day=1,
+    )
+
+    if month == 12:
+        next_month_start = pd.Timestamp(
+            year=year + 1,
+            month=1,
+            day=1,
+        )
+    else:
+        next_month_start = pd.Timestamp(
+            year=year,
+            month=month + 1,
+            day=1,
+        )
+
+    pickup_datetime = (
+        df["tpep_pickup_datetime"]
+    )
 
     outside_expected_year = (
-        (df["tpep_pickup_datetime"] < year_start)
-        | (df["tpep_pickup_datetime"] >= next_year_start)
+        (pickup_datetime < year_start)
+        | (pickup_datetime >= next_year_start)
     )
+
+    outside_expected_month = (
+        ~outside_expected_year
+        & (
+            (pickup_datetime < month_start)
+            | (
+                pickup_datetime
+                >= next_month_start
+            )
+        )
+    )
+
+    df.loc[
+        outside_expected_month,
+        "date_quality",
+    ] = "OUTSIDE_EXPECTED_MONTH"
 
     df.loc[
         outside_expected_year,
@@ -158,10 +262,8 @@ def apply_distance_quality(df):
 def apply_financial_quality(df):
     df = df.copy()
 
-    # Default classification
     df["financial_quality"] = "STANDARD"
 
-    # Zero values are preserved but explicitly classified.
     zero_reported = (
         (df["fare_amount"] == 0)
         | (df["total_amount"] == 0)
@@ -172,7 +274,6 @@ def apply_financial_quality(df):
         "financial_quality",
     ] = "ZERO_REPORTED"
 
-    # Negative values are preserved rather than assumed corrupt.
     negative_reported = (
         (df["fare_amount"] < 0)
         | (df["total_amount"] < 0)
@@ -183,8 +284,6 @@ def apply_financial_quality(df):
         "financial_quality",
     ] = "NEGATIVE_REPORTED"
 
-    # payment_type=0 represents source-specific Flex Fare
-    # semantics and therefore takes highest classification priority.
     source_specific = (
         df["payment_type"] == 0
     )
@@ -214,28 +313,58 @@ def write_parquet_to_s3(df, key):
     )
 
 
-def transform_file(raw_key, year: int):
+def transform_file(
+    raw_key,
+    year: int,
+):
     print(f"Reading {raw_key}...")
 
-    df = read_parquet_from_s3(raw_key)
+    df = read_parquet_from_s3(
+        raw_key
+    )
 
-    print(f"Rows loaded: {len(df):,}")
+    print(
+        f"Rows loaded: {len(df):,}"
+    )
+
+    file_name = (
+        raw_key.split("/")[-1]
+    )
+
+    month = extract_batch_month(
+        file_name,
+        year,
+    )
+
+    print(
+        f"Expected batch period: "
+        f"{year}-{month:02d}"
+    )
 
     df = normalize_source_schema(df)
     df = apply_temporal_quality(df)
-    df = apply_date_quality(df, year)
+
+    df = apply_date_quality(
+        df,
+        year,
+        month,
+    )
+
     df = apply_distance_quality(df)
     df = apply_financial_quality(df)
 
-    file_name = raw_key.split("/")[-1]
-
-    silver_prefix = f"silver/yellow_tripdata/year={year}/"
+    silver_prefix = (
+        f"silver/yellow_tripdata/"
+        f"year={year}/"
+    )
 
     silver_key = (
         f"{silver_prefix}{file_name}"
     )
 
-    print(f"Writing {silver_key}...")
+    print(
+        f"Writing {silver_key}..."
+    )
 
     write_parquet_to_s3(
         df,
@@ -246,29 +375,125 @@ def transform_file(raw_key, year: int):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise SystemExit(
-            "Usage: python src/transformation/transform_to_silver.py <year>"
+            "Usage: python "
+            "src/transformation/"
+            "transform_to_silver.py "
+            "<year> [file_name]"
         )
 
     try:
         year = int(sys.argv[1])
     except ValueError:
-        raise SystemExit("Year must be a number.")
+        raise SystemExit(
+            "Year must be a number."
+        )
 
-    raw_prefix = f"raw/yellow_tripdata/year={year}/"
-    raw_files = list_raw_files(year)
+    raw_prefix = (
+        f"raw/yellow_tripdata/"
+        f"year={year}/"
+    )
+
+    raw_files = list_raw_files(
+        year
+    )
 
     if not raw_files:
         raise FileNotFoundError(
-            f"No parquet files found under {raw_prefix}"
+            f"No parquet files found "
+            f"under {raw_prefix}"
         )
 
-    print(
-        f"Found {len(raw_files)} raw files for {year}.\n"
+    # ---------------------------------------------------------
+    # Explicit single-batch reprocessing
+    # ---------------------------------------------------------
+
+    if len(sys.argv) == 3:
+        file_name = sys.argv[2]
+
+        expected_prefix = (
+            f"yellow_tripdata_{year}-"
+        )
+
+        if (
+            not file_name.startswith(
+                expected_prefix
+            )
+            or not file_name.endswith(
+                ".parquet"
+            )
+        ):
+            raise SystemExit(
+                f"Invalid batch filename "
+                f"for {year}: {file_name}"
+            )
+
+        raw_key = (
+            f"{raw_prefix}{file_name}"
+        )
+
+        if raw_key not in raw_files:
+            raise FileNotFoundError(
+                f"Raw batch not found: "
+                f"{raw_key}"
+            )
+
+        print(
+            "Explicit reprocess mode"
+        )
+
+        print(
+            f"Batch: {file_name}\n"
+        )
+
+        transform_file(
+            raw_key,
+            year,
+        )
+
+        return
+
+    # ---------------------------------------------------------
+    # Normal incremental mode
+    # ---------------------------------------------------------
+
+    silver_files = list_silver_files(
+        year
     )
 
-    for raw_key in raw_files:
+    raw_files_to_process = [
+        raw_key
+        for raw_key in raw_files
+        if (
+            raw_key.split("/")[-1]
+            not in silver_files
+        )
+    ]
+
+    print(
+        f"Raw files found: "
+        f"{len(raw_files)}"
+    )
+
+    print(
+        f"Already in Silver: "
+        f"{len(silver_files)}"
+    )
+
+    print(
+        f"New files to transform: "
+        f"{len(raw_files_to_process)}\n"
+    )
+
+    if not raw_files_to_process:
+        print(
+            "No new Raw files to transform."
+        )
+
+        return
+
+    for raw_key in raw_files_to_process:
         transform_file(
             raw_key,
             year,

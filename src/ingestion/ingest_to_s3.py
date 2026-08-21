@@ -10,6 +10,23 @@ LOCAL_RAW_DIR = Path("data/raw")
 s3 = boto3.client("s3")
 
 
+def list_existing_s3_files(year: int) -> set[str]:
+    prefix = f"raw/yellow_tripdata/year={year}/"
+
+    response = s3.list_objects_v2(
+        Bucket=BUCKET_NAME,
+        Prefix=prefix,
+    )
+
+    objects = response.get("Contents", [])
+
+    return {
+        obj["Key"].split("/")[-1]
+        for obj in objects
+        if obj["Key"].endswith(".parquet")
+    }
+
+
 def upload_raw_data(year: int):
     year_dir = LOCAL_RAW_DIR / str(year)
 
@@ -22,9 +39,31 @@ def upload_raw_data(year: int):
             f"No {year} parquet files found in {year_dir}"
         )
 
-    print(f"Found {len(parquet_files)} files for {year}.")
+    print(
+        f"Found {len(parquet_files)} local files for {year}."
+    )
 
-    for file_path in parquet_files:
+    existing_files = list_existing_s3_files(year)
+
+    files_to_upload = [
+        file_path
+        for file_path in parquet_files
+        if file_path.name not in existing_files
+    ]
+
+    print(
+        f"Already in S3: {len(existing_files)}"
+    )
+
+    print(
+        f"New files to upload: {len(files_to_upload)}"
+    )
+
+    if not files_to_upload:
+        print("\nNo new files to upload.")
+        return
+
+    for file_path in files_to_upload:
         s3_key = (
             f"raw/yellow_tripdata/year={year}/{file_path.name}"
         )

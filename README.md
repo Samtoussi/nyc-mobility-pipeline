@@ -2,7 +2,7 @@
 
 An end-to-end data engineering and analytics project processing **48.7 million NYC Yellow Taxi trips from 2025** into validated, analytics-ready datasets and an interactive Power BI dashboard.
 
-The project covers the complete data lifecycle — from ingestion and cloud storage to data quality validation, transformation, analytical modeling, testing, and business intelligence.
+The project covers the complete data lifecycle — from ingestion and cloud storage to data quality validation, transformation, analytical modeling, testing, infrastructure as code, and business intelligence.
 
 ![NYC Mobility Analytics Dashboard](docs/nyc_dashboard1.jpg)
 
@@ -61,6 +61,17 @@ Gold Analytics Layer
         │
         ▼
 Power BI
+
+
+Infrastructure as Code
+        │
+        ▼
+Terraform
+        │
+        ├── Amazon S3
+        ├── AWS Glue Data Catalog
+        ├── AWS Glue Crawler
+        └── IAM
 ```
 
 ---
@@ -187,6 +198,29 @@ The intentionally simple orchestration reflects the current linear workflow with
 
 ---
 
+## Infrastructure as Code
+
+Core AWS infrastructure is managed using **Terraform**, providing a reproducible and version-controlled definition of the project's cloud resources.
+
+Terraform currently manages:
+
+- Amazon S3 storage
+- AWS Glue Data Catalog databases
+- AWS Glue Crawler
+- IAM role and crawler permissions
+
+Existing AWS resources were imported into Terraform state and reconciled with the infrastructure configuration. `terraform plan` is used to detect configuration drift and verify that the deployed AWS environment matches the declared infrastructure.
+
+Infrastructure definitions are located in:
+
+```text
+infrastructure/
+```
+
+Future infrastructure changes to Terraform-managed resources are made through Terraform rather than manually through the AWS Console.
+
+---
+
 ## Data Quality
 
 Data quality is treated as part of the pipeline rather than as a final cleanup step.
@@ -225,6 +259,7 @@ The project follows a **preserve source truth** approach: unusual source values 
 | Data Catalog | AWS Glue Data Catalog |
 | Query Engine | Amazon Athena |
 | Analytics Engineering | dbt |
+| Infrastructure as Code | Terraform |
 | BI & Visualization | Power BI |
 | Data Format | Apache Parquet |
 | Version Control | Git & GitHub |
@@ -246,6 +281,13 @@ mobility-project/
 │   ├── architecture.png
 │   ├── data_quality_contract.md
 │   └── nyc_dashboard.jpg
+│
+├── infrastructure/
+│   ├── crawler.tf
+│   ├── glue.tf
+│   ├── iam.tf
+│   ├── main.tf
+│   └── s3.tf
 │
 ├── scripts/
 │
@@ -272,15 +314,18 @@ Raw and generated datasets are excluded from version control.
 
 - Python
 - AWS credentials with access to the required S3, Glue, and Athena resources
+- Terraform
 - Power BI Desktop for dashboard development
 
 ### Setup
 
 ```bash
 git clone <repository-url>
+
 cd mobility-project
 
 python -m venv .venv
+
 pip install -r requirements.txt
 ```
 
@@ -289,6 +334,26 @@ On Windows:
 ```powershell
 .venv\Scripts\Activate.ps1
 ```
+
+### Provision infrastructure
+
+Terraform manages the core AWS infrastructure used by the project.
+
+```bash
+cd infrastructure
+
+terraform init
+
+terraform plan
+```
+
+Review the execution plan before applying infrastructure changes:
+
+```bash
+terraform apply
+```
+
+Return to the project root before running the data pipeline.
 
 ### Run ingestion
 
@@ -306,6 +371,7 @@ python src/orchestration/run_pipeline.py
 
 ```bash
 cd dbt/nyc_mobility
+
 dbt build
 ```
 
@@ -317,7 +383,8 @@ Gold models can then be queried through Amazon Athena and consumed by Power BI.
 
 - **Data Quality First** — validation is built into the pipeline.
 - **Preserve Source Truth** — anomalies are investigated and classified rather than silently removed.
-- **Separation of Concerns** — ingestion, validation, transformation, modeling, and visualization have distinct responsibilities.
+- **Separation of Concerns** — ingestion, validation, transformation, modeling, infrastructure, and visualization have distinct responsibilities.
+- **Infrastructure as Code** — core AWS infrastructure is declared and version-controlled using Terraform.
 - **Keep Complexity Justified** — additional infrastructure is introduced when a concrete problem requires it.
 
 ---
@@ -332,7 +399,7 @@ Future versions will focus on:
 - Benchmarking processing performance as data volume grows
 - Evaluating distributed processing when single-machine processing becomes a bottleneck
 - Automating execution as scheduling and orchestration requirements grow
-- Improving infrastructure reproducibility as the architecture evolves
+- Expanding Terraform coverage as the AWS architecture evolves
 
 Technology choices will continue to be driven by concrete requirements rather than added solely for architectural complexity.
 
@@ -348,4 +415,4 @@ Trip data is sourced from the public **NYC Taxi & Limousine Commission (NYC TLC)
 
 **V1 — Complete ✅**
 
-The first version delivers an end-to-end path from public source data to validated cloud storage, analytical models, automated tests, and an interactive BI dashboard.
+The first version delivers an end-to-end path from public source data to validated cloud storage, analytical models, automated tests, infrastructure as code, and an interactive BI dashboard.

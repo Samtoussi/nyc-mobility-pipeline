@@ -26,6 +26,22 @@ jobs:
       - name: Compile Python source
         run: python -m compileall src
 
+      - name: Create dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml <<'EOF'
+          nyc_mobility:
+            target: ci
+            outputs:
+              ci:
+                type: athena
+                s3_staging_dir: s3://dummy-ci-bucket/query-results/
+                region_name: eu-north-1
+                database: nyc_mobility
+                schema: nyc_mobility_gold
+                threads: 1
+          EOF
+
       - name: Validate dbt project
         working-directory: dbt/nyc_mobility
         run: dbt parse

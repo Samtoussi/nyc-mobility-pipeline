@@ -100,6 +100,16 @@ resource "aws_iam_role_policy" "github_actions" {
           aws_iam_role.ecs_task_execution.arn,
           aws_iam_role.ecs_task.arn
         ]
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "scheduler:GetSchedule",
+          "scheduler:UpdateSchedule"
+        ]
+
+        Resource = aws_scheduler_schedule.nyc_mobility.arn
       }
     ]
   })

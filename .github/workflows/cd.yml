@@ -17,6 +17,7 @@ env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: nyc-mobility
   ECS_TASK_FAMILY: nyc-mobility
+  SCHEDULER_NAME: nyc-mobility-weekly
 
 jobs:
   deploy:
@@ -63,6 +64,85 @@ jobs:
           image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.event.workflow_run.head_sha }}
 
       - name: Register new ECS task definition
+        id: register-task
+        shell: bash
         run: |
-          aws ecs register-task-definition \
-            --cli-input-json file://${{ steps.task-def.outputs.task-definition }}
+          NEW_TASK_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://${{ steps.task-def.outputs.task-definition }} \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+
+          echo "task_arn=$NEW_TASK_ARN" >> "$GITHUB_OUTPUT"
+          echo "Registered task definition: $NEW_TASK_ARN"
+
+      - name: Download current Scheduler configuration
+        run: |
+          aws scheduler get-schedule \
+            --name $SCHEDULER_NAME \
+            --region $AWS_REGION \
+            > scheduler.json
+
+      - name: Update Scheduler to latest task definition
+        shell: bash
+        env:
+          NEW_TASK_ARN: ${{ steps.register-task.outputs.task_arn }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          with open("scheduler.json", "r") as f:
+              schedule = json.load(f)
+
+          target = schedule["Target"]
+          target["EcsParameters"]["TaskDefinitionArn"] = os.environ["NEW_TASK_ARN"]
+
+          update_payload = {
+              "Name": schedule["Name"],
+              "ScheduleExpression": schedule["ScheduleExpression"],
+              "ScheduleExpressionTimezone": schedule.get(
+                  "ScheduleExpressionTimezone",
+                  "Europe/Stockholm"
+              ),
+              "FlexibleTimeWindow": schedule["FlexibleTimeWindow"],
+              "Target": target,
+              "State": schedule["State"]
+          }
+
+          if "Description" in schedule:
+              update_payload["Description"] = schedule["Description"]
+
+          if "StartDate" in schedule:
+              update_payload["StartDate"] = schedule["StartDate"]
+
+          if "EndDate" in schedule:
+              update_payload["EndDate"] = schedule["EndDate"]
+
+          with open("scheduler-update.json", "w") as f:
+              json.dump(update_payload, f)
+          PY
+
+          aws scheduler update-schedule \
+            --region $AWS_REGION \
+            --cli-input-json file://scheduler-update.json
+
+      - name: Verify deployment
+        shell: bash
+        env:
+          NEW_TASK_ARN: ${{ steps.register-task.outputs.task_arn }}
+        run: |
+          SCHEDULER_TASK_ARN=$(aws scheduler get-schedule \
+            --name $SCHEDULER_NAME \
+            --region $AWS_REGION \
+            --query "Target.EcsParameters.TaskDefinitionArn" \
+            --output text)
+
+          echo "New ECS task definition: $NEW_TASK_ARN"
+          echo "Scheduler task definition: $SCHEDULER_TASK_ARN"
+
+          if [ "$SCHEDULER_TASK_ARN" != "$NEW_TASK_ARN" ]; then
+            echo "Scheduler is not using the newly deployed task definition."
+            exit 1
+          fi
+
+          echo "Deployment verified successfully."

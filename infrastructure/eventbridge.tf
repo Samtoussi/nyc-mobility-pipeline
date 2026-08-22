@@ -84,6 +84,12 @@ data "aws_security_group" "default" {
 resource "aws_scheduler_schedule" "nyc_mobility" {
   name = "nyc-mobility-weekly"
 
+  lifecycle {
+    ignore_changes = [
+      target[0].ecs_parameters[0].task_definition_arn
+    ]
+  }
+
   schedule_expression          = "cron(0 8 ? * MON *)"
   schedule_expression_timezone = "Europe/Stockholm"
 

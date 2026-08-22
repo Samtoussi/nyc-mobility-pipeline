@@ -98,7 +98,8 @@ resource "aws_iam_role_policy" "github_actions" {
 
         Resource = [
           aws_iam_role.ecs_task_execution.arn,
-          aws_iam_role.ecs_task.arn
+          aws_iam_role.ecs_task.arn,
+          aws_iam_role.scheduler.arn
         ]
       },
       {

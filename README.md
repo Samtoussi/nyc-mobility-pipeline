@@ -1,80 +1,28 @@
 # 🚕 NYC Mobility Analytics
 
-An end-to-end data engineering and analytics project processing **147+ million NYC Yellow Taxi trips from 2023–2026** into validated, analytics-ready datasets and an interactive Power BI dashboard.
+An end-to-end cloud data engineering project that processes **147+ million NYC Yellow Taxi trips from 2023–2026** into validated, analytics-ready datasets and interactive dashboards.
 
-The project covers the complete data lifecycle — from incremental ingestion and cloud storage to data quality validation, transformation, analytical modeling, testing, infrastructure as code, and business intelligence.
+The platform incrementally discovers and processes newly published monthly data, runs automatically in AWS, builds tested analytical models with dbt, and exposes the results through both Power BI and a public Streamlit application.
 
-![NYC Mobility Analytics Dashboard](docs/dashboard.png)
+## 🌐 Live Dashboard
 
----
+**Streamlit:** https://nyc-mobility-analytics.streamlit.app
 
-## Project Overview
+The live dashboard provides interactive access to the Gold analytics layer through Amazon Athena.
 
-NYC Mobility Analytics was built to answer a simple question:
-
-> **How can large-scale public mobility data be transformed into reliable, decision-ready analytics?**
-
-Monthly NYC Yellow Taxi trip data is incrementally ingested into Amazon S3, validated, and transformed into a cleaned Silver layer using Python and Pandas.
-
-The pipeline processes data at the monthly batch level, allowing newly published TLC files to be added without reprocessing historical data. Individual batches can also be reprocessed and validated independently when required.
-
-The data is cataloged with AWS Glue and queried through Amazon Athena. dbt builds and tests the Gold analytics layer, which powers an interactive Power BI dashboard for exploring mobility patterns, revenue, demand, pickup activity, and year-over-year trends.
-
-The project follows a layered **Raw → Silver → Gold** architecture with explicit data quality controls between stages.
+![NYC Mobility Analytics Streamlit Dashboard](docs/streamlit_dashboard.gif)
 
 ---
 
 ## Architecture
 
-![NYC Mobility Analytics Architecture](docs/architecture1.png)
+![NYC Mobility Analytics V3 Architecture](docs/architecture3.png)
 
-```text
-NYC TLC Trip Data
-        │
-        ▼
-Incremental Python Ingestion
-        │
-        ▼
-Amazon S3 — Raw
-        │
-        ▼
-Raw Validation
-        │
-        ▼
-Python / Pandas Transformation
-        │
-        ▼
-Silver Validation
-        │
-        ▼
-Amazon S3 — Silver (Parquet)
-        │
-        ▼
-AWS Glue Data Catalog
-        │
-        ▼
-Amazon Athena
-        │
-        ▼
-dbt — Modeling & Testing
-        │
-        ▼
-Gold Analytics Layer
-        │
-        ▼
-Power BI
+Pipeline execution is containerized with Docker and runs as an **ECS Fargate task**, triggered automatically by **Amazon EventBridge Scheduler**.
 
+Infrastructure is provisioned with **Terraform**, while **GitHub Actions** provides CI/CD for validation and deployment.
 
-Infrastructure as Code
-        │
-        ▼
-Terraform
-        │
-        ├── Amazon S3
-        ├── AWS Glue Data Catalog
-        ├── AWS Glue Crawler
-        └── IAM
-```
+Failed ECS tasks are detected by **EventBridge** and published through **Amazon SNS** as email alerts.
 
 ---
 
@@ -82,65 +30,42 @@ Terraform
 
 ### Incremental Ingestion
 
-Monthly NYC Yellow Taxi Parquet files are ingested from the NYC Taxi & Limousine Commission dataset and uploaded to the Raw layer in Amazon S3.
+Monthly NYC Yellow Taxi Parquet files are discovered from the NYC Taxi & Limousine Commission dataset and uploaded to the Raw layer in Amazon S3.
 
-```text
-src/ingestion/ingest_to_s3.py
-```
+The ingestion process is incremental:
 
-The ingestion process is incremental. Existing Raw files are detected before processing so that newly available monthly batches can be added without unnecessarily downloading or overwriting historical data.
+- Newly published monthly batches are detected automatically
+- Existing Raw files are skipped
+- Historical data is not unnecessarily downloaded or overwritten
+- Individual batches can be reprocessed when required
 
-A separate TLC ingestion utility supports retrieving specific source batches when targeted ingestion or reprocessing is required.
+Raw source data is preserved without business transformations to maintain a reproducible source layer.
 
-```text
-src/ingestion/ingest_from_tlc.py
-```
+### Validation & Silver Transformation
 
-Raw data is preserved without business transformations to provide a reproducible source layer.
+Raw batches are validated before processing, including checks for:
 
-### Raw Validation
-
-Raw batches are validated before transformation.
-
-Checks include:
-
-- Required and unexpected columns
 - Schema consistency
-- Missing pickup timestamps
-- Missing dropoff timestamps
-- Expected batch-period validation
+- Required and unexpected columns
+- Missing timestamps
+- Expected source period
+- Batch-level completeness
 
-Validation is batch-aware, allowing individual monthly files to be checked independently.
+Failed validation prevents downstream processing of the affected batch.
 
-A failed validation stops downstream processing for the affected batch.
+Valid Raw data is transformed using **Python, Pandas, and PyArrow** and written to the Silver layer as Parquet.
 
-### Silver Transformation
-
-Validated Raw data is transformed using **Python, Pandas, and PyArrow**.
-
-The transformation cleans and standardizes the source data, derives analytical fields, applies explicit quality classifications, and writes Parquet data to the Silver layer in S3.
-
-```text
-src/transformation/transform_to_silver.py
-```
-
-Silver processing is incremental. Raw files already represented in Silver are skipped during normal processing, while specific batches can be deliberately reprocessed when required.
-
-### Silver Validation
-
-Silver data is validated across several quality dimensions, including:
+Silver validation then checks analytical quality dimensions including:
 
 - Trip duration
 - Trip distance
 - Financial values
-- Expected source period
+- Temporal validity
 - Required analytical fields
 
-Source anomalies are classified rather than automatically discarded, preserving source information while making data quality explicit.
+The project follows a **preserve source truth** approach: unusual source values are classified and investigated rather than silently removed.
 
-Date-quality validation is aware of the expected monthly batch period. Records falling outside the expected month can therefore be identified even when they remain within the same calendar year.
-
-The quality rules are documented in:
+Detailed quality rules are documented in:
 
 ```text
 docs/data_quality_contract.md
@@ -148,52 +73,110 @@ docs/data_quality_contract.md
 
 ### Catalog & Query
 
-Silver Parquet data is cataloged through **AWS Glue Data Catalog** and queried using **Amazon Athena**, providing a serverless SQL interface over data stored in S3.
-
-Partitioned multi-year data allows Athena to query the expanded dataset while retaining the underlying year-based S3 organization.
+Silver data is cataloged through **AWS Glue Data Catalog** and queried using **Amazon Athena**, providing a serverless SQL interface over the S3 data lake.
 
 ### Gold Modeling
 
-dbt builds and tests the analytical Gold layer.
+**dbt** transforms Silver data into the analytical Gold layer and applies automated tests.
 
 | Model | Purpose |
 |---|---|
-| `daily_mobility_metrics` | Daily trip volume, revenue, distance, duration, and quality KPIs |
+| `daily_mobility_metrics` | Daily trip volume and revenue metrics |
 | `hourly_mobility_patterns` | Weekday and hourly demand patterns |
 | `pickup_location_performance` | Pickup activity by taxi zone and borough |
-| `monthly_mobility_trends` | Monthly mobility KPIs for year-over-year trend analysis |
-| `yearly_mobility_summary` | Year-level trip, revenue, distance, and duration summaries |
+| `monthly_mobility_trends` | Monthly historical and year-over-year trends |
+| `yearly_mobility_summary` | Year-level trip, revenue, distance, and duration KPIs |
 
-The V2 dbt build completes successfully with **35 passes, 0 warnings, and 0 errors**.
+The Gold layer currently passes **35 dbt tests with 0 warnings and 0 errors**.
 
 ---
 
-## Power BI Dashboard
+## Automated Cloud Execution
 
-The Gold models power an interactive Power BI dashboard covering the full multi-year dataset.
+The processing workflow is containerized using **Docker** and deployed to **Amazon ECS Fargate**.
 
-The dashboard contains:
+```text
+EventBridge Scheduler
+        │
+        ▼
+ECS Fargate
+        │
+        ▼
+Pipeline Container
+        │
+        ├── Data Discovery / Ingestion
+        ├── Raw Validation
+        ├── Silver Transformation
+        ├── Silver Validation
+        └── dbt Gold Build
+```
 
-- Total Trips
-- Total Revenue
-- Average Revenue per Trip
-- Average Trip Distance
-- Daily trip trends
-- Top 10 pickup zones
-- Trips by borough
+The scheduled workflow allows the platform to discover and process newly available TLC data without depending on a local development machine.
+
+The orchestration intentionally remains lightweight because the workflow is currently linear. More complex orchestration would only be introduced if requirements such as independent workflows, complex dependencies, retries, or conditional execution justify it.
+
+---
+
+## Monitoring & Failure Alerts
+
+ECS task failures are monitored automatically.
+
+```text
+ECS Task
+   │
+   ▼
+STOPPED
+   │
+   ▼
+Exit Code != 0
+   │
+   ▼
+EventBridge
+   │
+   ▼
+Amazon SNS
+   │
+   ▼
+Email Alert
+```
+
+Successful tasks exit normally without generating alerts.
+
+The monitoring path was verified end-to-end using an intentionally failed Fargate task.
+
+---
+
+## Analytics
+
+### Streamlit
+
+The public Streamlit application queries the Gold layer through Amazon Athena and provides:
+
+- Year-based filtering
+- Total trips and revenue
+- Average revenue per trip
+- Average trip distance and duration
+- Monthly trip and revenue trends
+- Top pickup zones
+- Borough-level trip distribution
 - Weekday × hour demand heatmap
-- Date filtering across the multi-year dataset
-- Borough filtering
+- Latest available trip-data date
 
-The dashboard is connected to the AWS analytics layer through Amazon Athena.
+The dashboard automatically reflects new data as additional monthly batches are processed into the Gold layer.
 
-Filters allow the same analytical views to be explored across different time periods and boroughs without changing the underlying models.
+A dedicated **least-privilege IAM identity** is used by the deployed Streamlit application. Credentials are stored as deployment secrets rather than in the repository.
+
+### Power BI
+
+A Power BI dashboard provides an additional BI-oriented analytical interface over the same AWS Gold layer.
+
+![NYC Mobility Analytics Power BI Dashboard](docs/dashboard.png)
 
 ---
 
 ## Dataset
 
-V2 expands the analytical dataset from the original 2025 implementation to a multi-year dataset covering:
+The platform currently covers NYC Yellow Taxi data from:
 
 ```text
 2023
@@ -202,119 +185,71 @@ V2 expands the analytical dataset from the original 2025 implementation to a mul
 2026
 ```
 
-The resulting analytics layer contains approximately **147.2 million Yellow Taxi trips**.
+The analytical dataset contains approximately **147.2 million trips**.
 
-The pipeline is designed so that additional monthly TLC batches can be incorporated incrementally as new source data becomes available.
+The pipeline is designed to incorporate additional monthly TLC batches incrementally as they become available.
 
 ---
 
 ## Key Findings
 
-Analysis of the expanded dataset highlights several recurring mobility patterns:
+Analysis of the multi-year dataset highlights several recurring mobility patterns:
 
-- NYC Yellow Taxi activity shows clear recurring daily, weekly, and seasonal demand patterns across the dataset.
+- Manhattan accounts for the majority of analyzed Yellow Taxi pickup activity
+- Major transportation hubs such as JFK and LaGuardia appear among high-volume pickup locations
+- Evening hours consistently show strong taxi demand
+- Weekend demand follows a different hourly profile from weekdays
+- Trip volume shows clear monthly and seasonal variation
+- Multi-year data enables year-over-year comparison of broader mobility trends
 
-- Manhattan accounts for the majority of analyzed pickup activity, while Queens represents the second-largest share.
-
-- High-volume pickup locations are concentrated in Manhattan, with major transportation hubs such as JFK and LaGuardia also appearing among the busiest zones.
-
-- Evening hours consistently represent some of the highest-demand periods across weekdays.
-
-- Weekend demand follows a different hourly profile from weekday demand, with stronger activity during late-night and early-morning hours.
-
-- Monthly trip volumes vary substantially across both months and years, making year-over-year comparison useful for identifying broader mobility trends.
-
-The Power BI dashboard allows these patterns to be explored dynamically across the available date range and boroughs.
-
----
-
-## Orchestration
-
-V2 uses a lightweight Python orchestrator:
-
-```text
-src/orchestration/run_pipeline.py
-```
-
-The orchestrator coordinates the core batch-processing stages sequentially:
-
-```text
-Raw Validation
-      ↓
-Silver Transformation
-      ↓
-Silver Validation
-```
-
-Each step must complete successfully before the next begins.
-
-The workflow supports batch-level execution, making it possible to process and validate individual monthly source files rather than rerunning the entire historical dataset.
-
-The intentionally simple orchestration reflects the current linear workflow without introducing unnecessary infrastructure.
-
-More advanced orchestration will only be introduced when requirements such as multiple independent workflows, scheduling dependencies, retries, or conditional execution justify it.
+These patterns can be explored interactively through the dashboards.
 
 ---
 
 ## Infrastructure as Code
 
-Core AWS infrastructure is managed using **Terraform**, providing a reproducible and version-controlled definition of the project's cloud resources.
+AWS infrastructure is managed with **Terraform** and version-controlled alongside the application.
 
-Terraform currently manages:
+Terraform manages resources including:
 
-- Amazon S3 storage
-- AWS Glue Data Catalog databases
-- AWS Glue Crawler
-- IAM role and crawler permissions
+- Amazon S3
+- AWS Glue
+- Amazon Athena-related access
+- Amazon ECS
+- Amazon ECR
+- Amazon EventBridge Scheduler
+- Amazon SNS
+- IAM roles and policies
+- Streamlit application IAM access
+- Failure monitoring infrastructure
 
-Existing AWS resources were imported into Terraform state and reconciled with the infrastructure configuration. `terraform plan` is used to detect configuration drift and verify that the deployed AWS environment matches the declared infrastructure.
-
-Infrastructure definitions are located in:
-
-```text
-infrastructure/
-```
-
-Future infrastructure changes to Terraform-managed resources are made through Terraform rather than manually through the AWS Console.
+Terraform is also configured to avoid overwriting the ECS task-definition revision managed by the deployment pipeline, separating infrastructure ownership from application deployment.
 
 ---
 
-## Data Quality
+## CI/CD
 
-Data quality is treated as part of the pipeline rather than as a final cleanup step.
+**GitHub Actions** validates changes through the repository workflow.
+
+Development changes use a branch and pull-request workflow:
 
 ```text
-Raw
- │
- ├── Schema & completeness validation
- ├── Batch-period validation
- ▼
-Silver Transformation
- │
- ├── Semantic quality classification
- ▼
-Silver Validation
- │
- ├── Batch-aware validation
- ▼
-dbt Gold Models
- │
- ├── Automated tests
- ▼
-Analytics
+Feature Branch
+      │
+      ▼
+Pull Request
+      │
+      ▼
+CI Validation
+      │
+      ▼
+Merge to Main
+      │
+      ▼
+Deployment
 ```
 
-The project follows a **preserve source truth** approach: unusual source values are investigated and classified before deciding whether they should be excluded from analysis.
-
-Quality classifications include checks around:
-
-- Temporal validity
-- Expected source period
-- Trip distance
-- Financial values
-- Source-specific semantics
-
-This separates source anomalies from pipeline failures and allows downstream analytics to make explicit decisions about which records should contribute to individual metrics.
+Application deployment updates the ECS task definition and ensures the scheduled workload runs the deployed revision.
 
 ---
 
@@ -329,8 +264,13 @@ This separates source anomalies from pipeline failures and allows downstream ana
 | Data Catalog | AWS Glue Data Catalog |
 | Query Engine | Amazon Athena |
 | Analytics Engineering | dbt |
+| Compute | Amazon ECS Fargate |
+| Containerization | Docker |
+| Scheduling | Amazon EventBridge Scheduler |
+| Monitoring | EventBridge, Amazon SNS |
 | Infrastructure as Code | Terraform |
-| BI & Visualization | Power BI |
+| CI/CD | GitHub Actions |
+| Analytics / BI | Streamlit, Power BI |
 | Data Format | Apache Parquet |
 | Version Control | Git & GitHub |
 
@@ -341,6 +281,9 @@ This separates source anomalies from pipeline failures and allows downstream ana
 ```text
 mobility-project/
 │
+├── dashboard/
+│   └── app.py
+│
 ├── dbt/
 │   └── nyc_mobility/
 │       ├── models/gold/
@@ -348,124 +291,46 @@ mobility-project/
 │       └── tests/
 │
 ├── docs/
-│   ├── architecture.png
-│   ├── data_quality_contract.md
-│   └── nyc_dashboard1.jpg
+│   ├── architecture3.png
+│   ├── dashboard.png
+│   ├── streamlit_dashboard.png
+│   └── data_quality_contract.md
 │
 ├── infrastructure/
-│   ├── crawler.tf
-│   ├── glue.tf
-│   ├── iam.tf
-│   ├── main.tf
-│   └── s3.tf
-│
-├── scripts/
+│   ├── ecs.tf
+│   ├── eventbridge.tf
+│   ├── monitoring.tf
+│   ├── streamlit.tf
+│   └── ...
 │
 ├── src/
 │   ├── ingestion/
-│   ├── investigations/
 │   ├── observability/
 │   ├── orchestration/
 │   ├── transformation/
 │   └── validation/
 │
-├── .gitignore
+├── .github/workflows/
+├── Dockerfile
 ├── requirements.txt
 └── README.md
 ```
 
-Raw and generated datasets are excluded from version control.
-
----
-
-## Running the Project
-
-### Requirements
-
-- Python
-- AWS credentials with access to the required S3, Glue, and Athena resources
-- Terraform
-- Power BI Desktop for dashboard development
-
-### Setup
-
-```bash
-git clone <repository-url>
-cd mobility-project
-python -m venv .venv
-pip install -r requirements.txt
-```
-
-On Windows:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-### Provision infrastructure
-
-Terraform manages the core AWS infrastructure used by the project.
-
-```bash
-cd infrastructure
-terraform init
-terraform plan
-```
-
-Review the execution plan before applying infrastructure changes:
-
-```bash
-terraform apply
-```
-
-Return to the project root before running the data pipeline.
-
-### Run ingestion
-
-Run the standard incremental ingestion process:
-
-```bash
-python src/ingestion/ingest_to_s3.py
-```
-
-Specific TLC batches can also be ingested when targeted processing or recovery is required.
-
-### Run the processing pipeline
-
-```bash
-python src/orchestration/run_pipeline.py
-```
-
-The processing components also support targeted batch execution for individual monthly files.
-
-### Build and test Gold models
-
-```bash
-cd dbt/nyc_mobility
-dbt build
-```
-
-Gold models can then be queried through Amazon Athena and consumed by Power BI.
+Raw and generated datasets, credentials, Terraform state, and other local artifacts are excluded from version control.
 
 ---
 
 ## Design Principles
 
-- **Data Quality First** — validation is built into the pipeline.
-
-- **Preserve Source Truth** — anomalies are investigated and classified rather than silently removed.
-
-- **Incremental Processing** — new source batches are processed without unnecessarily reprocessing historical data.
-
-- **Idempotent Pipeline Behavior** — already processed batches are detected and skipped during normal execution.
-
-- **Batch-Level Recoverability** — individual monthly batches can be independently ingested, transformed, validated, and reprocessed.
-
-- **Separation of Concerns** — ingestion, validation, transformation, modeling, infrastructure, and visualization have distinct responsibilities.
-
-- **Infrastructure as Code** — core AWS infrastructure is declared and version-controlled using Terraform.
-
-- **Keep Complexity Justified** — additional infrastructure is introduced when a concrete problem requires it.
+- **Data Quality First** — validation is part of the pipeline rather than a final cleanup step
+- **Preserve Source Truth** — anomalies are classified before deciding whether they should be excluded
+- **Incremental Processing** — new monthly batches do not require historical reprocessing
+- **Idempotent Behavior** — already processed batches are detected and skipped
+- **Batch-Level Recoverability** — individual monthly batches can be independently reprocessed
+- **Separation of Concerns** — ingestion, transformation, validation, modeling, infrastructure, and presentation remain distinct
+- **Infrastructure as Code** — cloud infrastructure is reproducible and version-controlled
+- **Least Privilege** — deployed services receive only the AWS access required for their role
+- **Keep Complexity Justified** — technologies are introduced to solve concrete requirements rather than for architectural complexity
 
 ---
 
@@ -473,62 +338,24 @@ Gold models can then be queried through Amazon Athena and consumed by Power BI.
 
 ### V1 — End-to-End Foundation ✅
 
-V1 established the first complete path from NYC TLC source data to analytics.
+Established the first complete path from NYC TLC source data to analytics using S3, Python/Pandas, Glue, Athena, dbt, Terraform, and Power BI.
 
-Key capabilities included:
+### V2 — Incremental Multi-Year Analytics ✅
 
-- 2025 Yellow Taxi dataset
-- Amazon S3 Raw and Silver layers
-- Python/Pandas transformation
-- Raw and Silver validation
-- AWS Glue Data Catalog
-- Amazon Athena
-- dbt Gold models
-- Terraform-managed AWS infrastructure
-- Power BI dashboard
+Expanded the platform to **2023–2026 / 147+ million trips**, adding incremental monthly processing, batch-level recoverability, expanded validation, multi-year Gold models, and broader analytics.
 
-### V2 — Incremental Multi-Year Pipeline & Analytics ✅
+### V3 — Productionized Cloud Pipeline ✅
 
-V2 expands the original pipeline into a more robust incremental multi-year system.
+Operationalized the platform with:
 
-Key improvements include:
-
-- Dataset expanded from 2025 to **2023–2026**
-- Approximately **147.2 million trips**
-- Incremental monthly ingestion
-- Detection and skipping of previously processed files
-- Batch-level pipeline execution
-- Targeted batch reprocessing
-- Month-aware data-quality validation
-- Expanded Silver validation
-- Multi-year Athena querying
-- New monthly and yearly dbt Gold models
-- Expanded dbt test coverage to **35 passing tests**
-- Multi-year Power BI filtering
-- Updated and polished Power BI dashboard
-
----
-
-## Future Development
-
-V2 establishes a validated, incremental, multi-year analytical pipeline.
-
-Future versions can focus on operationalizing the system further as concrete requirements emerge.
-
-Potential next steps include:
-
-- Automated scheduled pipeline execution
-- Cloud-based execution independent of a local development machine
-- Pipeline monitoring and operational observability
-- Failure handling and retry behavior
-- Automated discovery and processing of newly published TLC batches
-- Benchmarking processing performance as data volume grows
-- Evaluating distributed processing if single-machine processing becomes a bottleneck
-- Expanding Terraform coverage as the AWS architecture evolves
-
-More advanced orchestration will be evaluated when the workflow develops requirements that justify it, such as multiple jobs with different schedules, dependencies, retries, or conditional execution.
-
-Technology choices will continue to be driven by concrete requirements rather than added solely for architectural complexity.
+- Docker containerization
+- ECS Fargate execution
+- EventBridge scheduling
+- Terraform-managed cloud infrastructure
+- GitHub Actions CI/CD
+- Automated failure detection and SNS alerts
+- Public Streamlit analytics application
+- Dedicated least-privilege dashboard IAM access
 
 ---
 
@@ -540,8 +367,8 @@ Trip data is sourced from the public **NYC Taxi & Limousine Commission (NYC TLC)
 
 ## Status
 
-**V2 — Complete ✅**
+### **V3 / v1.0 — Complete ✅**
 
-V2 delivers an incremental multi-year data platform covering approximately **147.2 million NYC Yellow Taxi trips from 2023–2026**, with batch-aware ingestion and validation, cloud storage, analytical modeling, automated testing, infrastructure as code, and an interactive Power BI analytics layer.
+NYC Mobility Analytics is a fully automated end-to-end cloud data platform that incrementally ingests, validates, transforms, models, and surfaces NYC Yellow Taxi data.
 
-The next phase will focus on operationalizing pipeline execution so that new data can be discovered, processed, validated, modeled, and surfaced with less manual intervention.
+The project is considered complete for its intended scope. Future changes will be driven by concrete requirements rather than additional infrastructure for its own sake.

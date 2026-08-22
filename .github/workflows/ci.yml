@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile Python source
+        run: python -m compileall src
+
+      - name: Validate dbt project
+        working-directory: dbt/nyc_mobility
+        run: dbt parse
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform format check
+        working-directory: infrastructure
+        run: terraform fmt -check
+
+      - name: Terraform init
+        working-directory: infrastructure
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: infrastructure
+        run: terraform validate

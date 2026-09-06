@@ -101,6 +101,11 @@ resource "aws_scheduler_schedule" "nyc_mobility" {
     arn      = aws_ecs_cluster.nyc_mobility.arn
     role_arn = aws_iam_role.scheduler.arn
 
+    retry_policy {
+      maximum_event_age_in_seconds = 3600
+      maximum_retry_attempts       = 3
+    }
+
     ecs_parameters {
       task_definition_arn = aws_ecs_task_definition.nyc_mobility.arn
       launch_type         = "FARGATE"

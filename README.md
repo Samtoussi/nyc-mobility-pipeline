@@ -293,7 +293,7 @@ mobility-project/
 ├── docs/
 │   ├── architecture3.png
 │   ├── dashboard.png
-│   ├── streamlit_dashboard.png
+│   ├── streamlit_dashboard.gif
 │   └── data_quality_contract.md
 │
 ├── infrastructure/

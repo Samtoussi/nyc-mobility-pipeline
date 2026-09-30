@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -7,6 +8,7 @@ import boto3
 
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
+GLUE_CRAWLER_NAME = "nyc-mobility-silver-crawler"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,6 +42,7 @@ SILVER_VALIDATION_SCRIPT = (
 
 
 s3 = boto3.client("s3")
+glue = boto3.client("glue")
 
 
 def list_parquet_files(prefix: str) -> set[str]:
@@ -151,6 +154,77 @@ def run_step(
     print("-" * 80)
 
 
+def run_glue_crawler():
+    print("\n" + "=" * 80)
+    print("STARTING: GLUE CRAWLER")
+    print(f"Crawler: {GLUE_CRAWLER_NAME}")
+    print("=" * 80)
+
+    started_at = datetime.now()
+
+    glue.start_crawler(
+        Name=GLUE_CRAWLER_NAME
+    )
+
+    print("Crawler started.")
+    print("Waiting for crawler to finish...")
+
+    while True:
+        response = glue.get_crawler(
+            Name=GLUE_CRAWLER_NAME
+        )
+
+        crawler = response["Crawler"]
+        state = crawler["State"]
+
+        print(f"Crawler state: {state}")
+
+        if state == "READY":
+            break
+
+        time.sleep(10)
+
+    crawler = glue.get_crawler(
+        Name=GLUE_CRAWLER_NAME
+    )["Crawler"]
+
+    last_crawl = crawler.get("LastCrawl")
+
+    if not last_crawl:
+        raise RuntimeError(
+            "Glue crawler finished without "
+            "LastCrawl information."
+        )
+
+    status = last_crawl.get("Status")
+
+    duration = datetime.now() - started_at
+
+    if status != "SUCCEEDED":
+        error_message = last_crawl.get(
+            "ErrorMessage",
+            "No error message returned."
+        )
+
+        print("\n" + "!" * 80)
+        print("FAILED: GLUE CRAWLER")
+        print(f"Status: {status}")
+        print(f"Error: {error_message}")
+        print(f"Runtime: {duration}")
+        print("!" * 80)
+
+        raise RuntimeError(
+            f"Glue crawler failed with "
+            f"status {status}."
+        )
+
+    print("\n" + "-" * 80)
+    print("SUCCESS: GLUE CRAWLER")
+    print(f"Status: {status}")
+    print(f"Runtime: {duration}")
+    print("-" * 80)
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -233,6 +307,12 @@ def main():
             year,
             file_name,
         )
+
+    # ---------------------------------------------------------
+    # 6. Refresh Glue Data Catalog
+    # ---------------------------------------------------------
+
+    run_glue_crawler()
 
     pipeline_finished_at = datetime.now()
 

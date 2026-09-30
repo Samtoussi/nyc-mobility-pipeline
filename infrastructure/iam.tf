@@ -155,3 +155,34 @@ resource "aws_iam_role_policy" "ecs_pipeline_s3" {
     ]
   })
 }
+
+
+# -------------------------------------------------------------------
+# Glue Crawler access for the NYC Mobility pipeline
+#
+# Allows the application running inside the ECS task to:
+# - start the Silver crawler after new Silver data is written
+# - poll the crawler until it has finished
+# -------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "ecs_pipeline_glue" {
+  name = "nyc-mobility-pipeline-glue"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "glue:StartCrawler",
+          "glue:GetCrawler"
+        ]
+
+        Resource = aws_glue_crawler.silver.arn
+      }
+    ]
+  })
+}

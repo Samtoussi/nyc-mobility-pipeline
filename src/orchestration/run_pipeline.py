@@ -10,6 +10,13 @@ BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+TLC_INGESTION_SCRIPT = (
+    PROJECT_ROOT
+    / "src"
+    / "ingestion"
+    / "ingest_from_tlc.py"
+)
+
 RAW_VALIDATION_SCRIPT = (
     PROJECT_ROOT
     / "src"
@@ -30,6 +37,7 @@ SILVER_VALIDATION_SCRIPT = (
     / "validation"
     / "validate_silver.py"
 )
+
 
 s3 = boto3.client("s3")
 
@@ -166,6 +174,20 @@ def main():
     print(f"Year: {year}")
     print(f"Started: {pipeline_started_at}")
 
+    # ---------------------------------------------------------
+    # 1. Discover and ingest newly published TLC batches
+    # ---------------------------------------------------------
+
+    run_step(
+        "TLC INGESTION",
+        TLC_INGESTION_SCRIPT,
+        year,
+    )
+
+    # ---------------------------------------------------------
+    # 2. Discover Raw batches that are missing from Silver
+    # ---------------------------------------------------------
+
     pending_batches = get_pending_batches(
         year
     )
@@ -179,7 +201,7 @@ def main():
         return
 
     # ---------------------------------------------------------
-    # 1. Validate every pending Raw batch
+    # 3. Validate every pending Raw batch
     # ---------------------------------------------------------
 
     for file_name in pending_batches:
@@ -191,7 +213,7 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # 2. Transform missing Raw batches
+    # 4. Transform missing Raw batches
     # ---------------------------------------------------------
 
     run_step(
@@ -201,7 +223,7 @@ def main():
     )
 
     # ---------------------------------------------------------
-    # 3. Validate every newly created Silver batch
+    # 5. Validate every newly created Silver batch
     # ---------------------------------------------------------
 
     for file_name in pending_batches:

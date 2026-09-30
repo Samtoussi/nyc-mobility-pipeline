@@ -1,4 +1,13 @@
 # -------------------------------------------------------------------
+# AWS account and region
+# -------------------------------------------------------------------
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+
+# -------------------------------------------------------------------
 # EventBridge Scheduler IAM role
 # -------------------------------------------------------------------
 
@@ -37,7 +46,7 @@ resource "aws_iam_role_policy" "scheduler" {
           "ecs:RunTask"
         ]
 
-        Resource = aws_ecs_task_definition.nyc_mobility.arn
+        Resource = "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${aws_ecs_task_definition.nyc_mobility.family}:*"
       },
       {
         Effect = "Allow"
@@ -118,4 +127,3 @@ resource "aws_scheduler_schedule" "nyc_mobility" {
     }
   }
 }
-

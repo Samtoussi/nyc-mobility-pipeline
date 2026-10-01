@@ -95,21 +95,41 @@ The Gold layer currently passes **35 dbt tests with 0 warnings and 0 errors**.
 
 The processing workflow is containerized using **Docker** and deployed to **Amazon ECS Fargate**.
 
+**Amazon EventBridge Scheduler** starts the pipeline every Monday at 08:00 (Europe/Stockholm). The workflow automatically discovers new monthly data, processes pending batches, refreshes the Glue catalog, and builds the Gold layer when required.
+
 ```text
 EventBridge Scheduler
-        │
-        ▼
+        |
+        v
 ECS Fargate
-        │
-        ▼
+        |
+        v
 Pipeline Container
-        │
-        ├── Data Discovery / Ingestion
-        ├── Raw Validation
-        ├── Silver Transformation
-        ├── Silver Validation
-        └── dbt Gold Build
+        |
+        +-- Data Discovery / Ingestion
+        |
+        +-- Raw Validation
+        |
+        +-- Silver Transformation
+        |
+        +-- Silver Validation
+        |
+        +-- Change Detection
+                |
+                +-- AWS Glue Crawler
+                |
+                +-- dbt Gold Build & Tests
+                |
+                +-- Save Gold Checkpoint to S3
 ```
+
+The pipeline uses an **S3-based Gold checkpoint** to track successful analytical builds. A fingerprint of the Silver Parquet files and dbt project files determines whether the Gold layer needs to be refreshed.
+
+When the fingerprint has not changed, the pipeline skips the Glue crawler and dbt build, avoiding unnecessary processing.
+
+The checkpoint is saved only after both the Glue crawler and dbt build complete successfully. If a Gold build fails, the checkpoint remains unchanged, allowing the next execution to retry the Gold build without reprocessing already completed Silver batches.
+
+The workflow was verified through a successful ECS Fargate execution that completed the Glue crawler and all 35 dbt build steps. A subsequent execution confirmed that unchanged Raw, Silver, and Gold data is detected and unnecessary processing is skipped.
 
 The scheduled workflow allows the platform to discover and process newly available TLC data without depending on a local development machine.
 
@@ -123,20 +143,20 @@ ECS task failures are monitored automatically.
 
 ```text
 ECS Task
-   │
-   ▼
+   |
+   v
 STOPPED
-   │
-   ▼
+   |
+   v
 Exit Code != 0
-   │
-   ▼
+   |
+   v
 EventBridge
-   │
-   ▼
+   |
+   v
 Amazon SNS
-   │
-   ▼
+   |
+   v
 Email Alert
 ```
 
@@ -235,17 +255,17 @@ Development changes use a branch and pull-request workflow:
 
 ```text
 Feature Branch
-      │
-      ▼
+      |
+      v
 Pull Request
-      │
-      ▼
+      |
+      v
 CI Validation
-      │
-      ▼
+      |
+      v
 Merge to Main
-      │
-      ▼
+      |
+      v
 Deployment
 ```
 
@@ -280,40 +300,40 @@ Application deployment updates the ECS task definition and ensures the scheduled
 
 ```text
 mobility-project/
-│
-├── dashboard/
-│   └── app.py
-│
-├── dbt/
-│   └── nyc_mobility/
-│       ├── models/gold/
-│       ├── seeds/
-│       └── tests/
-│
-├── docs/
-│   ├── architecture3.png
-│   ├── dashboard.png
-│   ├── streamlit_dashboard.gif
-│   └── data_quality_contract.md
-│
-├── infrastructure/
-│   ├── ecs.tf
-│   ├── eventbridge.tf
-│   ├── monitoring.tf
-│   ├── streamlit.tf
-│   └── ...
-│
-├── src/
-│   ├── ingestion/
-│   ├── observability/
-│   ├── orchestration/
-│   ├── transformation/
-│   └── validation/
-│
-├── .github/workflows/
-├── Dockerfile
-├── requirements.txt
-└── README.md
+|
++-- dashboard/
+|   +-- app.py
+|
++-- dbt/
+|   +-- nyc_mobility/
+|       +-- models/gold/
+|       +-- seeds/
+|       +-- tests/
+|
++-- docs/
+|   +-- architecture3.png
+|   +-- dashboard.png
+|   +-- streamlit_dashboard.gif
+|   +-- data_quality_contract.md
+|
++-- infrastructure/
+|   +-- ecs.tf
+|   +-- eventbridge.tf
+|   +-- monitoring.tf
+|   +-- streamlit.tf
+|   +-- ...
+|
++-- src/
+|   +-- ingestion/
+|   +-- observability/
+|   +-- orchestration/
+|   +-- transformation/
+|   +-- validation/
+|
++-- .github/workflows/
++-- Dockerfile
++-- requirements.txt
++-- README.md
 ```
 
 Raw and generated datasets, credentials, Terraform state, and other local artifacts are excluded from version control.

@@ -261,3 +261,31 @@ resource "aws_iam_role_policy" "ecs_pipeline_catalog" {
     ]
   })
 }
+
+# -------------------------------------------------------------------
+# S3 cleanup access for dbt Gold builds
+#
+# dbt needs to remove old Gold files when rebuilding tables.
+# This permission is restricted to the Gold prefix.
+# -------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "ecs_pipeline_gold_cleanup" {
+  name = "nyc-mobility-pipeline-gold-cleanup"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "s3:DeleteObject"
+        ]
+
+        Resource = "${aws_s3_bucket.mobility.arn}/gold/*"
+      }
+    ]
+  })
+}

@@ -385,8 +385,6 @@ def run_dbt_build():
     started_at = datetime.now()
 
     command = [
-        sys.executable,
-        "-m",
         "dbt",
         "build",
         "--profiles-dir",

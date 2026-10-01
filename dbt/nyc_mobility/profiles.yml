@@ -1,0 +1,13 @@
+nyc_mobility:
+  target: prod
+
+  outputs:
+    prod:
+      type: athena
+      region_name: eu-north-1
+      database: AwsDataCatalog
+      schema: nyc_mobility_gold
+      s3_staging_dir: s3://nyc-mobility-pipeline-samtoussi/athena-results/
+      s3_data_dir: s3://nyc-mobility-pipeline-samtoussi/gold/
+      work_group: primary
+      threads: 2

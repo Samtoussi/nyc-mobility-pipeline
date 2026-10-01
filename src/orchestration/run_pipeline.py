@@ -1,16 +1,23 @@
+import hashlib
+import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 
 BUCKET_NAME = "nyc-mobility-pipeline-samtoussi"
 GLUE_CRAWLER_NAME = "nyc-mobility-silver-crawler"
 
+SILVER_PREFIX = "silver/yellow_tripdata/"
+CHECKPOINT_KEY = "pipeline-state/gold-checkpoint.json"
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DBT_PROJECT_DIR = PROJECT_ROOT / "dbt" / "nyc_mobility"
 
 TLC_INGESTION_SCRIPT = (
     PROJECT_ROOT
@@ -46,36 +53,29 @@ glue = boto3.client("glue")
 
 
 def list_parquet_files(prefix: str) -> set[str]:
-    response = s3.list_objects_v2(
+    files = set()
+
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(
         Bucket=BUCKET_NAME,
         Prefix=prefix,
-    )
+    ):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
 
-    objects = response.get("Contents", [])
+            if key.endswith(".parquet"):
+                files.add(key.split("/")[-1])
 
-    return {
-        obj["Key"].split("/")[-1]
-        for obj in objects
-        if obj["Key"].endswith(".parquet")
-    }
+    return files
 
 
 def get_pending_batches(year: int) -> list[str]:
-    raw_prefix = (
-        f"raw/yellow_tripdata/year={year}/"
-    )
+    raw_prefix = f"raw/yellow_tripdata/year={year}/"
+    silver_prefix = f"silver/yellow_tripdata/year={year}/"
 
-    silver_prefix = (
-        f"silver/yellow_tripdata/year={year}/"
-    )
-
-    raw_files = list_parquet_files(
-        raw_prefix
-    )
-
-    silver_files = list_parquet_files(
-        silver_prefix
-    )
+    raw_files = list_parquet_files(raw_prefix)
+    silver_files = list_parquet_files(silver_prefix)
 
     pending_batches = sorted(
         raw_files - silver_files
@@ -140,8 +140,7 @@ def run_step(
         print("!" * 80)
 
         raise RuntimeError(
-            f"Pipeline stopped because "
-            f"{name} failed."
+            f"Pipeline stopped because {name} failed."
         )
 
     print("\n" + "-" * 80)
@@ -152,6 +151,150 @@ def run_step(
 
     print(f"Runtime: {duration}")
     print("-" * 80)
+
+
+def get_silver_fingerprint() -> str:
+    """
+    Create a fingerprint of the current Silver dataset.
+
+    Both object keys and ETags are included, so replacing
+    an existing Silver file also changes the fingerprint.
+    """
+
+    objects = []
+
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(
+        Bucket=BUCKET_NAME,
+        Prefix=SILVER_PREFIX,
+    ):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+
+            if key.endswith(".parquet"):
+                objects.append(
+                    {
+                        "key": key,
+                        "etag": obj["ETag"],
+                    }
+                )
+
+    objects.sort(key=lambda obj: obj["key"])
+
+    payload = json.dumps(
+        objects,
+        sort_keys=True,
+    )
+
+    fingerprint = hashlib.sha256(
+        payload.encode("utf-8")
+    ).hexdigest()
+
+    print("\nSILVER FINGERPRINT")
+    print("-" * 80)
+    print(f"Parquet objects: {len(objects)}")
+    print(f"Fingerprint: {fingerprint}")
+
+    return fingerprint
+
+
+def get_dbt_fingerprint() -> str:
+    """
+    Create a fingerprint of the dbt project.
+
+    Changes to models, seeds or project configuration
+    will trigger a new Gold build.
+    """
+
+    files = [
+        path
+        for path in DBT_PROJECT_DIR.rglob("*")
+        if path.is_file()
+        and path.suffix in {".sql", ".csv", ".yml", ".yaml"}
+        and path.name not in {"profiles.yml", ".user.yml"}
+        and not any(
+            directory in path.parts
+            for directory in {"target", "logs", "dbt_packages"}
+        )
+    ]
+
+    digest = hashlib.sha256()
+
+    for path in sorted(files):
+        relative_path = path.relative_to(DBT_PROJECT_DIR)
+
+        digest.update(
+            relative_path.as_posix().encode("utf-8")
+        )
+
+        digest.update(
+            path.read_bytes()
+        )
+
+    fingerprint = digest.hexdigest()
+
+    print("\nDBT FINGERPRINT")
+    print("-" * 80)
+    print(f"Project files: {len(files)}")
+    print(f"Fingerprint: {fingerprint}")
+
+    return fingerprint
+
+
+def get_gold_checkpoint() -> str | None:
+    """
+    Read the fingerprint from the last successful
+    Glue + dbt run.
+    """
+
+    try:
+        response = s3.get_object(
+            Bucket=BUCKET_NAME,
+            Key=CHECKPOINT_KEY,
+        )
+
+    except ClientError as error:
+        error_code = error.response["Error"]["Code"]
+
+        if error_code in ("NoSuchKey", "404"):
+            print("\nNo Gold checkpoint found.")
+            return None
+
+        raise
+
+    checkpoint = json.loads(
+        response["Body"].read()
+    )
+
+    return checkpoint.get("silver_fingerprint")
+
+
+def save_gold_checkpoint(
+    fingerprint: str,
+):
+    """
+    Save the checkpoint only after both Glue
+    and dbt have completed successfully.
+    """
+
+    checkpoint = {
+        "silver_fingerprint": fingerprint,
+        "completed_at": datetime.now().isoformat(),
+    }
+
+    s3.put_object(
+        Bucket=BUCKET_NAME,
+        Key=CHECKPOINT_KEY,
+        Body=json.dumps(
+            checkpoint,
+            indent=2,
+        ).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    print("\nGold checkpoint saved.")
+    print(f"S3 key: {CHECKPOINT_KEY}")
 
 
 def run_glue_crawler():
@@ -169,18 +312,29 @@ def run_glue_crawler():
     print("Crawler started.")
     print("Waiting for crawler to finish...")
 
-    while True:
-        response = glue.get_crawler(
-            Name=GLUE_CRAWLER_NAME
-        )
+    timeout_seconds = 1800
 
-        crawler = response["Crawler"]
+    while True:
+        crawler = glue.get_crawler(
+            Name=GLUE_CRAWLER_NAME
+        )["Crawler"]
+
         state = crawler["State"]
 
         print(f"Crawler state: {state}")
 
         if state == "READY":
             break
+
+        elapsed = (
+            datetime.now() - started_at
+        ).total_seconds()
+
+        if elapsed >= timeout_seconds:
+            raise TimeoutError(
+                "Glue crawler did not finish "
+                "within 30 minutes."
+            )
 
         time.sleep(10)
 
@@ -197,13 +351,12 @@ def run_glue_crawler():
         )
 
     status = last_crawl.get("Status")
-
     duration = datetime.now() - started_at
 
     if status != "SUCCEEDED":
         error_message = last_crawl.get(
             "ErrorMessage",
-            "No error message returned."
+            "No error message returned.",
         )
 
         print("\n" + "!" * 80)
@@ -214,13 +367,52 @@ def run_glue_crawler():
         print("!" * 80)
 
         raise RuntimeError(
-            f"Glue crawler failed with "
-            f"status {status}."
+            f"Glue crawler failed with status {status}."
         )
 
     print("\n" + "-" * 80)
     print("SUCCESS: GLUE CRAWLER")
     print(f"Status: {status}")
+    print(f"Runtime: {duration}")
+    print("-" * 80)
+
+
+def run_dbt_build():
+    print("\n" + "=" * 80)
+    print("STARTING: DBT GOLD BUILD")
+    print("=" * 80)
+
+    started_at = datetime.now()
+
+    command = [
+        sys.executable,
+        "-m",
+        "dbt",
+        "build",
+        "--profiles-dir",
+        str(DBT_PROJECT_DIR),
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=DBT_PROJECT_DIR,
+    )
+
+    duration = datetime.now() - started_at
+
+    if result.returncode != 0:
+        print("\n" + "!" * 80)
+        print("FAILED: DBT GOLD BUILD")
+        print(f"Exit code: {result.returncode}")
+        print(f"Runtime: {duration}")
+        print("!" * 80)
+
+        raise RuntimeError(
+            "Pipeline stopped because dbt build failed."
+        )
+
+    print("\n" + "-" * 80)
+    print("SUCCESS: DBT GOLD BUILD")
     print(f"Runtime: {duration}")
     print("-" * 80)
 
@@ -235,6 +427,7 @@ def main():
 
     try:
         year = int(sys.argv[1])
+
     except ValueError:
         raise SystemExit(
             "Year must be a number."
@@ -259,60 +452,81 @@ def main():
     )
 
     # ---------------------------------------------------------
-    # 2. Discover Raw batches that are missing from Silver
+    # 2. Discover Raw batches missing from Silver
     # ---------------------------------------------------------
 
-    pending_batches = get_pending_batches(
-        year
-    )
-
-    if not pending_batches:
-        print("\n" + "=" * 80)
-        print("PIPELINE COMPLETE")
-        print("=" * 80)
-        print("Status: SUCCESS")
-        print("No new batches to process.")
-        return
+    pending_batches = get_pending_batches(year)
 
     # ---------------------------------------------------------
-    # 3. Validate every pending Raw batch
+    # 3. Process new batches, if any
     # ---------------------------------------------------------
 
-    for file_name in pending_batches:
+    if pending_batches:
+        for file_name in pending_batches:
+            run_step(
+                "RAW VALIDATION",
+                RAW_VALIDATION_SCRIPT,
+                year,
+                file_name,
+            )
+
         run_step(
-            "RAW VALIDATION",
-            RAW_VALIDATION_SCRIPT,
+            "SILVER TRANSFORMATION",
+            TRANSFORMATION_SCRIPT,
             year,
-            file_name,
         )
 
+        for file_name in pending_batches:
+            run_step(
+                "SILVER VALIDATION",
+                SILVER_VALIDATION_SCRIPT,
+                year,
+                file_name,
+            )
+
+    else:
+        print("\nNo new Raw batches to process.")
+
     # ---------------------------------------------------------
-    # 4. Transform missing Raw batches
+    # 4. Check whether Gold needs to be refreshed
     # ---------------------------------------------------------
 
-    run_step(
-        "SILVER TRANSFORMATION",
-        TRANSFORMATION_SCRIPT,
-        year,
+    silver_fingerprint = get_silver_fingerprint()
+    dbt_fingerprint = get_dbt_fingerprint()
+
+    current_fingerprint = hashlib.sha256(
+        f"{silver_fingerprint}:{dbt_fingerprint}".encode("utf-8")
+    ).hexdigest()
+
+    previous_fingerprint = get_gold_checkpoint()
+
+    gold_needs_refresh = (
+        current_fingerprint != previous_fingerprint
     )
 
     # ---------------------------------------------------------
-    # 5. Validate every newly created Silver batch
+    # 5. Refresh Glue and build Gold when necessary
     # ---------------------------------------------------------
 
-    for file_name in pending_batches:
-        run_step(
-            "SILVER VALIDATION",
-            SILVER_VALIDATION_SCRIPT,
-            year,
-            file_name,
+    if gold_needs_refresh:
+        print("\nGold refresh required.")
+
+        run_glue_crawler()
+        run_dbt_build()
+
+        # Save the checkpoint only after both
+        # operations have succeeded.
+        save_gold_checkpoint(
+            current_fingerprint
         )
 
-    # ---------------------------------------------------------
-    # 6. Refresh Glue Data Catalog
-    # ---------------------------------------------------------
+    else:
+        print("\nGold is already up to date.")
+        print("Skipping Glue Crawler and dbt build.")
 
-    run_glue_crawler()
+    # ---------------------------------------------------------
+    # 6. Pipeline summary
+    # ---------------------------------------------------------
 
     pipeline_finished_at = datetime.now()
 
@@ -330,6 +544,10 @@ def main():
     print(
         f"Batches processed: "
         f"{len(pending_batches)}"
+    )
+    print(
+        f"Gold refreshed: "
+        f"{gold_needs_refresh}"
     )
 
     print(f"Started:  {pipeline_started_at}")

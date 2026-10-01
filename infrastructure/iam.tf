@@ -186,3 +186,78 @@ resource "aws_iam_role_policy" "ecs_pipeline_glue" {
     ]
   })
 }
+
+# -------------------------------------------------------------------
+# Athena access for dbt Gold builds
+# -------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "ecs_pipeline_athena" {
+  name = "nyc-mobility-pipeline-athena"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:StopQueryExecution",
+          "athena:GetWorkGroup",
+          "athena:GetDataCatalog"
+        ]
+
+        Resource = [
+          "arn:aws:athena:eu-north-1:${data.aws_caller_identity.current.account_id}:workgroup/primary",
+          "arn:aws:athena:eu-north-1:${data.aws_caller_identity.current.account_id}:datacatalog/AwsDataCatalog"
+        ]
+      }
+    ]
+  })
+}
+
+# -------------------------------------------------------------------
+# Glue Data Catalog access for dbt Gold builds
+# -------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "ecs_pipeline_catalog" {
+  name = "nyc-mobility-pipeline-catalog"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:CreateTable",
+          "glue:UpdateTable",
+          "glue:DeleteTable",
+          "glue:BatchCreatePartition",
+          "glue:BatchDeletePartition",
+          "glue:BatchUpdatePartition"
+        ]
+
+        Resource = [
+          "arn:aws:glue:eu-north-1:${data.aws_caller_identity.current.account_id}:catalog",
+          "arn:aws:glue:eu-north-1:${data.aws_caller_identity.current.account_id}:database/nyc_mobility",
+          "arn:aws:glue:eu-north-1:${data.aws_caller_identity.current.account_id}:database/nyc_mobility_gold",
+          "arn:aws:glue:eu-north-1:${data.aws_caller_identity.current.account_id}:table/nyc_mobility/*",
+          "arn:aws:glue:eu-north-1:${data.aws_caller_identity.current.account_id}:table/nyc_mobility_gold/*"
+        ]
+      }
+    ]
+  })
+}

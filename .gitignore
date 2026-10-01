@@ -34,3 +34,6 @@ Thumbs.db
 *.tfstate.*
 crash.log
 crash.*.log
+
+# Local dbt user configuration
+.user.yml
